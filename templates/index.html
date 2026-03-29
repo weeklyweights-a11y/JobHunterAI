@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JobHunter AI</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="app-body">
+    <header class="site-header">
+        <div class="container">
+            <h1 class="site-title">JobHunter AI</h1>
+            <p class="site-subtitle">Fresh job links, on your schedule</p>
+        </div>
+    </header>
+
+    <main class="container main-flow">
+        <form class="card form-card" id="config-form" action="#" autocomplete="off">
+            <h2 class="card-title">Setup Your Search</h2>
+
+            <section class="form-section" aria-labelledby="search-criteria-heading">
+                <h3 id="search-criteria-heading" class="section-heading">Search criteria</h3>
+                <div class="field-group">
+                    <label class="field-label" for="role-input">Roles</label>
+                    <div class="tag-input-row">
+                        <input type="text" id="role-input" class="text-input" placeholder="Type a role and press Enter..." autocomplete="off">
+                        <button type="button" class="btn btn-secondary" id="role-add-btn">Add</button>
+                    </div>
+                    <div class="chip-list" id="role-chips" aria-live="polite"></div>
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="location-input">Locations</label>
+                    <div class="tag-input-row">
+                        <input type="text" id="location-input" class="text-input" placeholder="Type a location and press Enter..." autocomplete="off">
+                        <button type="button" class="btn btn-secondary" id="location-add-btn">Add</button>
+                    </div>
+                    <div class="chip-list" id="location-chips" aria-live="polite"></div>
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="experience-select">Experience</label>
+                    <select id="experience-select" class="select-input">
+                        <option value="any">Any</option>
+                        <option value="entry">Entry Level</option>
+                        <option value="mid">Mid Level</option>
+                        <option value="senior">Senior</option>
+                        <option value="lead">Lead / Principal</option>
+                    </select>
+                </div>
+            </section>
+
+            <section class="form-section" aria-labelledby="sources-heading">
+                <h3 id="sources-heading" class="section-heading">Sources</h3>
+                <div class="toggle-row" role="group" aria-label="Job sources">
+                    <label class="toggle"><input type="checkbox" id="src-linkedin" checked data-source-key="linkedin"><span class="toggle-ui"></span><span>LinkedIn</span></label>
+                    <label class="toggle"><input type="checkbox" id="src-indeed" checked data-source-key="indeed"><span class="toggle-ui"></span><span>Indeed</span></label>
+                    <label class="toggle"><input type="checkbox" id="src-yc" checked data-source-key="yc"><span class="toggle-ui"></span><span>YC Work at a Startup</span></label>
+                    <label class="toggle"><input type="checkbox" id="src-career" checked data-source-key="career_page"><span class="toggle-ui"></span><span>Custom Career Pages</span></label>
+                </div>
+            </section>
+
+            <section class="form-section" aria-labelledby="career-pages-heading">
+                <h3 id="career-pages-heading" class="section-heading">Career Pages to Monitor</h3>
+                <div class="url-add-row">
+                    <input type="url" id="career-url-input" class="text-input" placeholder="Paste a Greenhouse, Lever, or company careers URL...">
+                    <button type="button" class="btn btn-secondary" id="career-add-btn">Add</button>
+                </div>
+                <ul class="url-list" id="career-url-list"></ul>
+            </section>
+
+            <section class="form-section" aria-labelledby="custom-sites-heading">
+                <h3 id="custom-sites-heading" class="section-heading">Other Job Sites</h3>
+                <div class="url-add-row">
+                    <input type="url" id="custom-url-input" class="text-input" placeholder="Paste any job board or careers URL...">
+                    <button type="button" class="btn btn-secondary" id="custom-add-btn">Add</button>
+                </div>
+                <ul class="url-list" id="custom-url-list"></ul>
+            </section>
+
+            <section class="form-section" aria-labelledby="email-heading">
+                <h3 id="email-heading" class="section-heading">Email</h3>
+                <div class="field-group">
+                    <label class="field-label" for="email-address">Email address</label>
+                    <input type="email" id="email-address" class="text-input" placeholder="you@gmail.com">
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="email-password">Gmail app password</label>
+                    <input type="password" id="email-password" class="text-input" placeholder="Leave blank to keep saved password" autocomplete="new-password">
+                    <p class="help-text"><a href="https://support.google.com/accounts/answer/185833" target="_blank" rel="noopener">How to create a Gmail App Password</a></p>
+                </div>
+            </section>
+
+            <section class="form-section" aria-labelledby="llm-heading">
+                <h3 id="llm-heading" class="section-heading">LLM provider</h3>
+                <div class="field-group">
+                    <label class="field-label" for="llm-provider">Provider</label>
+                    <select id="llm-provider" class="select-input">
+                        <option value="gemini">Gemini Flash (Recommended — Cheapest)</option>
+                        <option value="openai">GPT-4o Mini</option>
+                        <option value="anthropic">Claude Sonnet</option>
+                        <option value="ollama">Ollama (Local — Free)</option>
+                    </select>
+                </div>
+                <div class="field-group" id="llm-key-group">
+                    <label class="field-label" for="llm-api-key" id="llm-key-label">Google API Key</label>
+                    <input type="password" id="llm-api-key" class="text-input" placeholder="Leave blank to keep saved key" autocomplete="new-password">
+                </div>
+                <p class="help-text hidden" id="ollama-hint">Make sure Ollama is running locally.</p>
+            </section>
+
+            <section class="form-section" aria-labelledby="schedule-heading">
+                <h3 id="schedule-heading" class="section-heading">Schedule</h3>
+                <div class="field-group">
+                    <label class="field-label" for="schedule-hours">Run every</label>
+                    <select id="schedule-hours" class="select-input">
+                        <option value="2">2 hours</option>
+                        <option value="4" selected>4 hours</option>
+                        <option value="6">6 hours</option>
+                        <option value="8">8 hours</option>
+                        <option value="12">12 hours</option>
+                        <option value="24">24 hours</option>
+                    </select>
+                </div>
+            </section>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-save" id="save-settings-btn">Save Settings</button>
+            </div>
+        </form>
+
+        <section class="card status-card" aria-labelledby="status-heading">
+            <h2 id="status-heading" class="card-title">Agent</h2>
+            <div class="status-log" id="status-log" aria-live="polite"></div>
+            <p class="job-found-counter hidden" id="job-found-counter" aria-live="polite"></p>
+            <div class="status-actions">
+                <button type="button" class="btn btn-start" id="btn-start-hunt">Start Hunting</button>
+                <button type="button" class="btn btn-danger hidden" id="btn-stop-hunt">Stop</button>
+                <button type="button" class="btn btn-secondary" id="btn-download" disabled>Download Latest Report</button>
+            </div>
+        </section>
+
+        <section class="card jobs-card" aria-labelledby="jobs-heading">
+            <div class="jobs-header">
+                <h2 id="jobs-heading" class="card-title">Jobs Found</h2>
+                <span class="badge" id="jobs-today-badge">0 jobs found today</span>
+            </div>
+            <div class="filter-row" role="toolbar" aria-label="Filter by source">
+                <button type="button" class="filter-btn active" data-filter="all">All</button>
+                <button type="button" class="filter-btn" data-filter="linkedin">LinkedIn</button>
+                <button type="button" class="filter-btn" data-filter="indeed">Indeed</button>
+                <button type="button" class="filter-btn" data-filter="yc">YC</button>
+                <button type="button" class="filter-btn" data-filter="career_page">Career Pages</button>
+            </div>
+            <div class="table-wrap">
+                <table class="data-table jobs-table" id="jobs-table">
+                    <thead>
+                        <tr>
+                            <th>Title</th>
+                            <th>Company</th>
+                            <th>Source</th>
+                            <th>Found</th>
+                            <th>Link</th>
+                        </tr>
+                    </thead>
+                    <tbody id="jobs-tbody"></tbody>
+                </table>
+            </div>
+            <div class="empty-state" id="jobs-empty">
+                <p>No jobs found yet. Configure your search above and hit Start Hunting!</p>
+            </div>
+        </section>
+
+        <section class="card run-history-card" aria-labelledby="run-history-heading">
+            <h2 id="run-history-heading" class="card-title">Run history</h2>
+            <details class="run-history-details" id="run-history-panel">
+                <summary>Show recent runs</summary>
+                <div class="table-wrap">
+                    <table class="data-table" id="runs-table">
+                        <thead>
+                            <tr>
+                                <th>Date / time</th>
+                                <th>Duration</th>
+                                <th>Jobs found</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="runs-tbody"></tbody>
+                    </table>
+                </div>
+            </details>
+        </section>
+    </main>
+
+    <div id="toast-root" class="toast-root" aria-live="assertive"></div>
+    <script src="/static/app.js"></script>
+</body>
+</html>

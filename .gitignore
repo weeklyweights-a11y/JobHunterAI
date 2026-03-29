@@ -1,0 +1,21 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.db
+*.xlsx
+.DS_Store
+venv/
+output/
+*.pyc
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+test_agent.py
+
+# Planning / phase specs (keep README.md)
+PHASE*.md
+*SPEC*.md
+TASKS.md
+PROJECT.md
