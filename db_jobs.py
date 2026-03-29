@@ -46,14 +46,21 @@ async def add_job(
         return cur.rowcount > 0
 
 
-async def add_jobs_bulk(jobs: list[dict[str, Any]]) -> int:
+async def add_jobs_bulk(
+    jobs: list[dict[str, Any]],
+    *,
+    found_at_iso: str | None = None,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Insert jobs with URL dedup; return (count inserted, rows that were new)."""
+    run_ts = found_at_iso or datetime.now().isoformat(timespec="seconds")
     added = 0
+    new_rows: list[dict[str, Any]] = []
     async with aiosqlite.connect(DB_PATH) as db:
         for j in jobs:
             cur = await db.execute(
                 """INSERT OR IGNORE INTO jobs
-                (title, company, url, source, search_role, search_location)
-                VALUES (?, ?, ?, ?, ?, ?)""",
+                (title, company, url, source, search_role, search_location, found_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     j["title"],
                     j.get("company"),
@@ -61,11 +68,24 @@ async def add_jobs_bulk(jobs: list[dict[str, Any]]) -> int:
                     j.get("source"),
                     j.get("search_role"),
                     j.get("search_location"),
+                    run_ts,
                 ),
             )
-            added += cur.rowcount
+            if cur.rowcount > 0:
+                added += cur.rowcount
+                new_rows.append(
+                    {
+                        "title": j["title"],
+                        "company": (j.get("company") or "") or "",
+                        "url": j["url"],
+                        "source": j.get("source") or "",
+                        "search_role": j.get("search_role"),
+                        "search_location": j.get("search_location"),
+                        "found_at": run_ts,
+                    }
+                )
         await db.commit()
-    return added
+    return added, new_rows
 
 
 async def get_all_jobs(

@@ -103,8 +103,20 @@
                 <div class="field-group" id="llm-key-group">
                     <label class="field-label" for="llm-api-key" id="llm-key-label">Google API Key</label>
                     <input type="password" id="llm-api-key" class="text-input" placeholder="Leave blank to keep saved key" autocomplete="new-password">
+                    <button type="button" class="btn btn-secondary" id="btn-validate-llm-key" style="margin-top:0.5rem">Test Gemini API key</button>
                 </div>
                 <p class="help-text hidden" id="ollama-hint">Make sure Ollama is running locally.</p>
+                <p class="help-text" id="llm-key-hint">Gemini/OpenAI/Anthropic need a valid API key. If you see “API key not valid” in the server log, paste a new key and Save.</p>
+            </section>
+
+            <section class="form-section" aria-labelledby="browser-heading">
+                <h3 id="browser-heading" class="section-heading">Browser (same Chrome = new tabs)</h3>
+                <p class="help-text"><strong>If this field is empty</strong>, JobHunter opens a <strong>second browser window</strong> (Playwright Chromium). That is expected.</p>
+                <div class="field-group">
+                    <label class="field-label" for="browser-cdp-url">Chrome CDP URL</label>
+                    <input type="url" id="browser-cdp-url" class="text-input" placeholder="http://127.0.0.1:9222" autocomplete="off">
+                </div>
+                <p class="help-text">To reuse <strong>this</strong> Chrome (automation opens <strong>new tabs</strong> here, not another app): (1) Quit every Chrome window. (2) Start Chrome with debugging, e.g. <code>"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222</code>. (3) In <em>that</em> window only, open this dashboard. (4) Paste <code>http://127.0.0.1:9222</code> above, Save settings, then Start Hunting.</p>
             </section>
 
             <section class="form-section" aria-labelledby="schedule-heading">
@@ -120,6 +132,10 @@
                         <option value="24">24 hours</option>
                     </select>
                 </div>
+                <p class="scheduler-row">
+                    <span id="scheduler-autorun-badge" class="scheduler-badge scheduler-badge--off" aria-live="polite">Auto-run: OFF</span>
+                </p>
+                <p class="scheduler-next-run help-text" id="scheduler-next-run" aria-live="polite">Next run: —</p>
             </section>
 
             <div class="form-actions">

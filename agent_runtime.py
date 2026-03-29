@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from datetime import datetime
 from typing import Any
 
 import db
+from agents.llm_setup import _env_fallback_key
 from agents.orchestrator import run_hunt
 
 
@@ -25,6 +27,50 @@ def init_agent_state(app: Any) -> None:
     app.state.last_duration_seconds: float | None = None
 
 
+def config_allows_schedule(cfg: dict[str, Any]) -> bool:
+    """True if config is complete enough for Start Hunting / auto-run."""
+    return validate_start_config(cfg) is None
+
+
+async def try_start_hunt(
+    app: Any,
+    *,
+    reason: str = "manual",
+) -> dict[str, Any]:
+    """
+    Start a hunt if idle and config valid. Used by POST /start and the scheduler.
+    Returns {"started": bool, "run_id": int | None, "detail": str | None}.
+    detail is "already_running", validation message, or None on success.
+    """
+    st = app.state
+    lock = st.agent_start_lock
+    async with lock:
+        if st.agent_task is not None and not st.agent_task.done():
+            return {
+                "started": False,
+                "run_id": None,
+                "detail": "already_running",
+            }
+
+        cfg = await db.get_config()
+        err = validate_start_config(cfg)
+        if err:
+            return {"started": False, "run_id": None, "detail": err}
+
+        st.last_duration_seconds = None
+        run_id = await db.create_run("running")
+        st.event_queue = asyncio.Queue()
+        st.current_run_id = run_id
+        st.last_summary = None
+        st.progress_message = "Starting hunt…"
+
+        task = asyncio.create_task(_agent_run_coroutine(app, run_id))
+        st.agent_task = task
+        _ = reason  # reserved for logging / future metrics
+
+    return {"started": True, "run_id": run_id, "detail": None}
+
+
 def validate_start_config(cfg: dict[str, Any]) -> str | None:
     roles = [r for r in (cfg.get("roles") or []) if isinstance(r, str) and r.strip()]
     locs = [l for l in (cfg.get("locations") or []) if isinstance(l, str) and l.strip()]
@@ -32,9 +78,24 @@ def validate_start_config(cfg: dict[str, Any]) -> str | None:
         return "Add at least one role in Setup Your Search."
     if not locs:
         return "Add at least one location in Setup Your Search."
-    key = (cfg.get("llm_api_key") or "").strip()
+    provider = (cfg.get("llm_provider") or "gemini").strip().lower()
+    key = (_env_fallback_key(provider) or "").strip()
     if not key:
-        return "Set an LLM API key in LLM provider (or save settings with a key)."
+        key = (cfg.get("llm_api_key") or "").strip()
+    gemini_vertex = (
+        provider == "gemini"
+        and (os.getenv("JOBHUNTER_GEMINI_BACKEND") or "").strip().lower()
+        in ("vertex", "vertexai", "gcp")
+        and (
+            os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT") or ""
+        ).strip()
+    )
+    if provider != "ollama" and not key and not gemini_vertex:
+        return (
+            "Set an LLM API key in LLM provider, save settings, or set GOOGLE_API_KEY / "
+            "OPENAI_API_KEY / ANTHROPIC_API_KEY in .env. For billed GCP Gemini, set "
+            "JOBHUNTER_GEMINI_BACKEND=vertex and GOOGLE_CLOUD_PROJECT (no AI Studio key required)."
+        )
     sources = cfg.get("sources") or {}
     board_on = any(sources.get(k, False) for k in ("linkedin", "indeed", "yc"))
     career_on = bool(sources.get("career_page"))

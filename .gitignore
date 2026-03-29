@@ -6,7 +6,8 @@ __pycache__/
 *.xlsx
 .DS_Store
 venv/
-output/
+output/*.xlsx
+!output/.gitkeep
 *.pyc
 *.egg-info/
 dist/
@@ -19,3 +20,9 @@ PHASE*.md
 *SPEC*.md
 TASKS.md
 PROJECT.md
+
+# Cursor / IDE (local only; do not commit)
+.cursorrules
+cursorrules
+.cursor/
+.cursorignore

@@ -28,6 +28,7 @@ class ConfigIn(BaseModel):
     llm_provider: LlmProvider | None = None
     llm_api_key: str | None = None
     resume_path: str | None = None
+    browser_cdp_url: str | None = None
 
     @field_validator("roles", "locations", mode="before")
     @classmethod
@@ -67,6 +68,16 @@ class ConfigOut(BaseModel):
     llm_provider: str
     llm_api_key: str
     resume_path: str
+    browser_cdp_url: str = ""
+
+
+class LlmKeyValidateIn(BaseModel):
+    """Optional api_key: omit or empty to test the key already saved in config (Gemini only)."""
+
+    model_config = {"extra": "forbid"}
+
+    provider: LlmProvider = "gemini"
+    api_key: str | None = None
 
 
 class UrlPayload(BaseModel):
@@ -104,3 +115,11 @@ class JobStatsResponse(BaseModel):
     today: int
     by_source: dict[str, int]
     by_role: dict[str, int]
+
+
+class SchedulerStatusResponse(BaseModel):
+    """GET /api/scheduler inner `data` object."""
+
+    active: bool
+    next_run: str | None = None
+    interval_hours: int

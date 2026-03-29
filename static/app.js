@@ -41,13 +41,27 @@ function updateLlmUi() {
     const keyGroup = document.getElementById("llm-key-group");
     const keyLabel = document.getElementById("llm-key-label");
     const ollamaHint = document.getElementById("ollama-hint");
+    const keyHint = document.getElementById("llm-key-hint");
+    const validateBtn = document.getElementById("btn-validate-llm-key");
     if (provider === "ollama") {
         keyGroup.classList.add("hidden");
         ollamaHint.classList.remove("hidden");
+        if (keyHint) {
+            keyHint.classList.add("hidden");
+        }
+        if (validateBtn) {
+            validateBtn.classList.add("hidden");
+        }
     } else {
         keyGroup.classList.remove("hidden");
         ollamaHint.classList.add("hidden");
+        if (keyHint) {
+            keyHint.classList.remove("hidden");
+        }
         keyLabel.textContent = LLM_KEY_LABELS[provider] || "API Key";
+        if (validateBtn) {
+            validateBtn.classList.toggle("hidden", provider !== "gemini");
+        }
     }
 }
 
@@ -141,6 +155,10 @@ function buildSettingsPayload(includeSecretsIfPresent) {
         custom_sites: state.customSites,
         schedule_hours: Number(document.getElementById("schedule-hours").value),
         llm_provider: provider,
+        browser_cdp_url: (function () {
+            const el = document.getElementById("browser-cdp-url");
+            return el && el.value ? el.value.trim() : "";
+        })(),
     };
     if (includeSecretsIfPresent) {
         const ep = document.getElementById("email-password").value;
@@ -192,6 +210,10 @@ async function loadConfig() {
     document.getElementById("email-password").value = "";
     document.getElementById("llm-provider").value = data.llm_provider || "gemini";
     document.getElementById("llm-api-key").value = "";
+    const cdpEl = document.getElementById("browser-cdp-url");
+    if (cdpEl) {
+        cdpEl.value = data.browser_cdp_url || "";
+    }
     updateLlmUi();
 
     let sh = Number(data.schedule_hours);
@@ -295,11 +317,39 @@ async function removeCustomUrl(url) {
     }
 }
 
+async function validateLlmKey() {
+    const provider = document.getElementById("llm-provider").value;
+    const keyEl = document.getElementById("llm-api-key");
+    const key = keyEl && keyEl.value ? keyEl.value.trim() : "";
+    if (provider === "ollama") {
+        showToast("Ollama has no API key to test here.", "");
+        return;
+    }
+    if (provider !== "gemini") {
+        showToast("Key test is only implemented for Gemini. Save and use your provider's console for others.", "error");
+        return;
+    }
+    try {
+        const res = await apiJson("/api/validate-llm-key", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                provider: provider,
+                api_key: key || null,
+            }),
+        });
+        const msg = (res.data && res.data.message) || "API key is valid.";
+        showToast(msg, "success");
+    } catch (e) {
+        showToast(e.message || "Validation failed", "error");
+    }
+}
+
 async function saveSettings(e) {
     e.preventDefault();
     const payload = buildSettingsPayload(true);
     try {
-        await apiJson("/api/config", {
+        const res = await apiJson("/api/config", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
@@ -307,8 +357,15 @@ async function saveSettings(e) {
         document.getElementById("email-password").value = "";
         document.getElementById("llm-api-key").value = "";
         showToast("Settings saved.", "success");
+        if (res.meta && res.meta.scheduler_activated) {
+            showToast(
+                "Auto-run enabled! First run starting in 30 seconds...",
+                "success"
+            );
+        }
         await loadDownloadAvailability();
         await loadJobStats();
+        await loadSchedulerStatus();
     } catch (err) {
         showToast(err.message, "error");
     }
@@ -465,15 +522,72 @@ async function loadRuns() {
     }
 }
 
-async function loadDownloadAvailability() {
-    try {
-        const res = await apiJson("/api/download/latest", { method: "GET" });
-        const d = res.data || {};
-        const btn = document.getElementById("btn-download");
-        btn.disabled = !d.available;
-    } catch (e) {
-        document.getElementById("btn-download").disabled = true;
+function renderSchedulerStatus(data) {
+    const badge = document.getElementById("scheduler-autorun-badge");
+    const nextEl = document.getElementById("scheduler-next-run");
+    if (!badge || !nextEl) {
+        return;
     }
+    const d = data || {};
+    const active = !!d.active;
+    badge.textContent = active ? "Auto-run: ON" : "Auto-run: OFF";
+    badge.classList.toggle("scheduler-badge--on", active);
+    badge.classList.toggle("scheduler-badge--off", !active);
+    if (!active) {
+        nextEl.textContent = "Auto-run disabled (incomplete config)";
+        return;
+    }
+    if (d.next_run) {
+        const dt = new Date(d.next_run);
+        const local =
+            dt && !Number.isNaN(dt.getTime())
+                ? dt.toLocaleString(undefined, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                  })
+                : String(d.next_run);
+        nextEl.textContent = "Next run: " + local;
+    } else {
+        nextEl.textContent = "Next run: —";
+    }
+}
+
+async function loadSchedulerStatus() {
+    try {
+        const res = await apiJson("/api/scheduler", { method: "GET" });
+        renderSchedulerStatus(res.data || {});
+    } catch (e) {
+        renderSchedulerStatus({ active: false, next_run: null, interval_hours: 4 });
+    }
+}
+
+async function loadDownloadAvailability() {
+    const btn = document.getElementById("btn-download");
+    if (!btn) {
+        return;
+    }
+    try {
+        const [statsRes, infoRes] = await Promise.all([
+            apiJson("/api/jobs/stats", { method: "GET" }),
+            apiJson("/api/download/info", { method: "GET" }),
+        ]);
+        const total = (statsRes.data && statsRes.data.total) || 0;
+        const avail = !!(infoRes.data && infoRes.data.available);
+        btn.disabled = !(total > 0 || avail);
+    } catch (e) {
+        btn.disabled = true;
+    }
+}
+
+function flashDownloadButton() {
+    const btn = document.getElementById("btn-download");
+    if (!btn) {
+        return;
+    }
+    btn.classList.add("download-flash");
+    setTimeout(function () {
+        btn.classList.remove("download-flash");
+    }, 4000);
 }
 
 function clearStatusLog() {
@@ -572,6 +686,15 @@ function handleSsePayload(type, rawData) {
             loadRuns();
         }
         const d = payload.data || {};
+        const tn = d.total_new != null ? Number(d.total_new) : 0;
+        if (tn > 0 && !d.stopped && !d.failed) {
+            loadDownloadAvailability().then(function () {
+                flashDownloadButton();
+            });
+        } else {
+            loadDownloadAvailability();
+        }
+        loadSchedulerStatus();
         if (msg && !d.stopped && !d.failed) {
             showToast(msg, "success");
         }
@@ -591,6 +714,7 @@ async function startHunt() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(buildSettingsPayload(true)),
         });
+        await loadSchedulerStatus();
         await apiJson("/api/start", { method: "POST" });
         state.jobFoundCount = 0;
         setJobFoundCounterVisible(false);
@@ -659,12 +783,21 @@ document.addEventListener("DOMContentLoaded", function () {
 
     document.getElementById("llm-provider").addEventListener("change", updateLlmUi);
 
+    const validateBtn = document.getElementById("btn-validate-llm-key");
+    if (validateBtn) {
+        validateBtn.addEventListener("click", validateLlmKey);
+    }
+
     document.getElementById("config-form").addEventListener("submit", saveSettings);
 
     wireFilters();
 
     document.getElementById("btn-start-hunt").addEventListener("click", startHunt);
     document.getElementById("btn-stop-hunt").addEventListener("click", stopHunt);
+
+    document.getElementById("btn-download").addEventListener("click", function () {
+        window.open("/api/download/latest", "_blank", "noopener,noreferrer");
+    });
 
     document.getElementById("run-history-panel").addEventListener("toggle", function (ev) {
         const det = ev.target;
@@ -684,10 +817,15 @@ document.addEventListener("DOMContentLoaded", function () {
                 loadJobsToday(),
                 loadJobStats(),
                 loadDownloadAvailability(),
+                loadSchedulerStatus(),
                 syncStatus(),
             ]);
         })
         .catch(function (e) {
             showToast(e.message || "Failed to load config", "error");
         });
+
+    setInterval(function () {
+        loadSchedulerStatus();
+    }, 60000);
 });

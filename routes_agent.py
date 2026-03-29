@@ -11,8 +11,7 @@ from typing import Any, AsyncIterator
 from fastapi import APIRouter, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
-import db
-from agent_runtime import _agent_run_coroutine, validate_start_config
+from agent_runtime import try_start_hunt
 from schemas import AgentStatusResponse, StartAgentData, StopAgentData
 
 logger = logging.getLogger(__name__)
@@ -23,27 +22,14 @@ router = APIRouter(tags=["agent"])
 @router.post("/start")
 async def start_agent(request: Request) -> dict[str, Any]:
     app = request.app
-    st = app.state
-    lock = st.agent_start_lock
-    async with lock:
-        if st.agent_task is not None and not st.agent_task.done():
+    result = await try_start_hunt(app, reason="manual")
+    if not result["started"]:
+        detail = result.get("detail") or "Cannot start hunt"
+        if detail == "already_running":
             raise HTTPException(status_code=409, detail="Agent is already running")
-
-        cfg = await db.get_config()
-        err = validate_start_config(cfg)
-        if err:
-            raise HTTPException(status_code=400, detail=err)
-
-        st.last_duration_seconds = None
-        run_id = await db.create_run("running")
-        st.event_queue = asyncio.Queue()
-        st.current_run_id = run_id
-        st.last_summary = None
-        st.progress_message = "Starting hunt…"
-
-        task = asyncio.create_task(_agent_run_coroutine(app, run_id))
-        st.agent_task = task
-
+        raise HTTPException(status_code=400, detail=detail)
+    run_id = result["run_id"]
+    assert run_id is not None
     return {"data": StartAgentData(run_id=run_id, status="started").model_dump()}
 
 

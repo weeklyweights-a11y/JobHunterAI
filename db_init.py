@@ -94,4 +94,10 @@ async def init_db() -> None:
         run_cols = {row[1] for row in await cur.fetchall()}
         if "duration_sec" not in run_cols:
             await db.execute("ALTER TABLE runs ADD COLUMN duration_sec REAL")
+        cur = await db.execute("PRAGMA table_info(config)")
+        cfg_cols = {row[1] for row in await cur.fetchall()}
+        if "browser_cdp_url" not in cfg_cols:
+            await db.execute(
+                "ALTER TABLE config ADD COLUMN browser_cdp_url TEXT NOT NULL DEFAULT ''"
+            )
         await db.commit()

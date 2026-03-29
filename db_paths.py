@@ -30,6 +30,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "llm_provider": "gemini",
     "llm_api_key": "",
     "resume_path": "",
+    "browser_cdp_url": "",
 }
 
 

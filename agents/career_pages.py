@@ -25,6 +25,7 @@ async def search_career_pages(
     llm: BaseChatModel,
     urls: list[str],
     emit: EmitFn | None = None,
+    app_cfg: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     async def _emit(msg: str) -> None:
         if emit:
@@ -34,7 +35,7 @@ async def search_career_pages(
     for i, url in enumerate(urls):
         await _emit(f"Scanning career page: {url}")
         try:
-            jobs = await run_agent_task(llm, _career_task(url))
+            jobs = await run_agent_task(llm, _career_task(url), app_cfg)
             collected.extend(jobs)
             logger.info("Career URL %s: %s jobs", url, len(jobs))
         except Exception:

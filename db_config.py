@@ -19,6 +19,10 @@ def _normalize_sources(raw: dict[str, Any]) -> dict[str, bool]:
 
 
 def _row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
+    keys = row.keys()
+    cdp = ""
+    if "browser_cdp_url" in keys and row["browser_cdp_url"] is not None:
+        cdp = str(row["browser_cdp_url"])
     return {
         "id": row["id"],
         "roles": parse_list(row["roles"]),
@@ -33,6 +37,7 @@ def _row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
         "llm_provider": row["llm_provider"],
         "llm_api_key": row["llm_api_key"],
         "resume_path": row["resume_path"],
+        "browser_cdp_url": cdp,
     }
 
 
@@ -54,7 +59,7 @@ async def save_config(data: dict[str, Any]) -> dict[str, Any]:
                 roles = ?, locations = ?, experience = ?, email_address = ?,
                 email_app_password = ?, schedule_hours = ?, sources = ?,
                 career_pages = ?, custom_sites = ?, llm_provider = ?,
-                llm_api_key = ?, resume_path = ?
+                llm_api_key = ?, resume_path = ?, browser_cdp_url = ?
             WHERE id = 1""",
             (
                 dump_json(payload["roles"]),
@@ -69,6 +74,7 @@ async def save_config(data: dict[str, Any]) -> dict[str, Any]:
                 payload["llm_provider"],
                 payload["llm_api_key"],
                 payload["resume_path"],
+                str(payload.get("browser_cdp_url") or "").strip(),
             ),
         )
         await db.commit()

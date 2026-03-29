@@ -11,6 +11,7 @@ browser-use==0.1.40
 # packages are installed as dependencies of browser-use (same spec step).
 langchain-core>=0.3.30,<0.4
 langchain-google-genai>=2.0,<3
+langchain-google-vertexai>=2.0,<3
 openpyxl==3.1.5
 apscheduler==3.10.4
 aiofiles==24.1.0

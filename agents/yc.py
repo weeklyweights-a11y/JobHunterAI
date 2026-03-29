@@ -30,6 +30,7 @@ async def search_yc(
     roles: list[str],
     locations: list[str],
     emit: EmitFn | None = None,
+    app_cfg: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     async def _emit(msg: str) -> None:
         if emit:
@@ -40,7 +41,7 @@ async def search_yc(
     for i, (role, loc) in enumerate(combos):
         await _emit(f"Searching YC Work at a Startup for {role} in {loc}...")
         try:
-            jobs = await run_agent_task(llm, _yc_task(role, loc))
+            jobs = await run_agent_task(llm, _yc_task(role, loc), app_cfg)
             for item in jobs:
                 item["search_role"] = role
                 item["search_location"] = loc
