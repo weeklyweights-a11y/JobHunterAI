@@ -15,17 +15,10 @@ logger = logging.getLogger(__name__)
 
 
 def _yc_task(role: str, location: str) -> str:
-    return f"""Complete this task in the browser:
-
-1. Go to https://www.workatastartup.com/jobs
-2. If there is a search or filter, enter the role: {role!r}
-3. If there is a location filter, set it to: {location!r}
-4. For each job listing, read any "posted" or date indicator
-5. Only include jobs posted "today", "1 day ago", "new", or similar meaning within ~24 hours
-6. For each qualifying job, extract title, company name, and job URL
-7. If there is no role search field, scroll listings and prefer jobs whose titles match keywords from {role!r}
-8. When finished, use only the "done" action. In the done text, output a JSON array of objects
-   with keys "title", "company", "url". No markdown. If none, output [].
+    return f"""Open https://www.workatastartup.com/jobs — apply role {role!r} and location {location!r} if filters exist.
+Prefer listings that look recent (today / 1 day / new). Skip obvious stale posts.
+One screen of results is enough; extract title, company, URL per listing.
+Done action only: JSON array of {{"title","company","url"}}. No markdown. If none, [].
 
 Role: {role}
 Location: {location}

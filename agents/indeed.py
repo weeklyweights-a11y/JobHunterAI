@@ -15,18 +15,10 @@ logger = logging.getLogger(__name__)
 
 
 def _indeed_task(role: str, location: str) -> str:
-    return f"""Complete this task in the browser:
-
-1. Go to https://www.indeed.com
-2. In the "what" / job title field, type: {role!r}
-3. In the "where" / location field, clear it and type: {location!r}
-4. Click the search button
-5. Open the "Date posted" filter and select "Last 24 hours"
-6. Wait for results to load
-7. For each job listing, extract job title, company name, and the full URL to the job posting
-8. If there is a next page, go to it — up to 2 pages total
-9. When finished, use only the "done" action. In the done text, output a JSON array of objects
-   with keys "title", "company", "url". No markdown. If none, output [].
+    return f"""On https://www.indeed.com search for job {role!r} in {location!r}. Submit search and wait for listings.
+Optionally narrow to recent postings if a date filter is obvious. Use the first results page only.
+Extract title, company, and full job URL for each listing.
+Done action only: JSON array of {{"title","company","url"}}. No markdown. If none, [].
 
 Role: {role}
 Location: {location}

@@ -73,13 +73,20 @@ Do NOT introduce any technology not listed here. No Redis. No PostgreSQL. No Cel
 - Use parameterized queries. Never format SQL strings.
 - Always use context managers for connections.
 
+## Windows + browser-use (non-negotiable)
+
+- Users must start the server with `python run.py` so `WindowsProactorEventLoopPolicy` is set before uvicorn imports `app`. Do not set the event loop policy in `app.py` (duplicate + wrong process under reload).
+- Default `JOBHUNTER_RELOAD` is off; reload subprocess breaks Playwright on Windows.
+- Logged-in sessions: prefer **CDP** — `JOBHUNTER_CDP_URL` to Chrome started with `--remote-debugging-port=9222`, or `JOBHUNTER_CHROME_PATH` for browser-use’s chrome_instance_path flow. Do not rely on `--user-data-dir` on Playwright Chromium unless `JOBHUNTER_USE_CHROME_PROFILE` is explicitly documented as fragile.
+- Keep agent task prompts short and single-page focused; long multi-step prompts fail on dynamic sites.
+
 ## Agent Rules
 
 - Each source (LinkedIn, Indeed, YC, career pages) is a separate file in agents/.
 - orchestrator.py coordinates all agents and reports status.
 - Agent tasks are defined as plain-English instructions passed to browser-use.
 - The agent LLM provider is configurable: gemini (default), openai, anthropic, ollama.
-- Agent must use the user's real Chrome profile so logged-in sessions (LinkedIn) persist.
+- Browser connection is configured in `agents/base.py` (CDP first, then optional profile).
 - Agent runs in a background asyncio task, not blocking the FastAPI server.
 - Status updates are pushed to a queue that the SSE endpoint reads from.
 - Each agent function returns a list of dicts: [{"title": str, "company": str, "url": str}]

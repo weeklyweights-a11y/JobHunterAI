@@ -2,13 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import sys
-
-# Playwright needs subprocess support on Windows; Proactor provides it.
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 

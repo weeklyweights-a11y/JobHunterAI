@@ -15,15 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 def _career_task(url: str) -> str:
-    return f"""Complete this task in the browser:
-
-1. Navigate to {url}
-2. Read the page and find all job listings or open positions
-3. For each listing, extract job title, company name (from page header or nearby context),
-   and the URL to that specific job posting
-4. Do not filter by posting date
-5. When finished, use only the "done" action. In the done text, output a JSON array of objects
-   with keys "title", "company", "url". No markdown. If none, output [].
+    return f"""Go to {url}. Find open roles on this page (and one level of obvious "see all" if present).
+For each role: title, company (from page if visible), direct link.
+Done action only: JSON array of {{"title","company","url"}}. No markdown. If none, [].
 """
 
 

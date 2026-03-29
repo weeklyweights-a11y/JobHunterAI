@@ -29,8 +29,8 @@ load_dotenv()
 
 def main() -> None:
     print("JobHunter AI — open http://localhost:8000 in your browser")
-    # JOBHUNTER_RELOAD=0 avoids uvicorn reloader subprocess quirks with Playwright on Windows.
-    reload_on = os.getenv("JOBHUNTER_RELOAD", "true").lower() in ("1", "true", "yes")
+    # Default off: uvicorn reload spawns a child process where Playwright/asyncio on Windows breaks.
+    reload_on = os.getenv("JOBHUNTER_RELOAD", "false").lower() in ("1", "true", "yes")
     uvicorn.run(
         "app:app",
         host="0.0.0.0",
