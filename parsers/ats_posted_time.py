@@ -239,6 +239,23 @@ def _greenhouse_remix_date(html: str) -> str | None:
     return None
 
 
+def _greenhouse_posted_time_from_embedded(html: str) -> str | None:
+    """
+    New boards (job-boards.greenhouse.io): ``window.__remixContext`` → loaderData → jobPost.published_at.
+    Falls back to scanning raw HTML for ``published_at`` (legacy / escaped JSON).
+    """
+    try:
+        from parsers.greenhouse_http import merge_greenhouse_remix_page_into_job
+
+        patch = merge_greenhouse_remix_page_into_job(html, "")
+        pt = patch.get("posted_time")
+        if isinstance(pt, str) and pt.strip():
+            return pt.strip()
+    except Exception:
+        logger.debug("greenhouse remix posted_time extract", exc_info=True)
+    return _greenhouse_remix_date(html)
+
+
 def _generic_date_posted_in_html(html: str) -> str | None:
     m = _GENERIC_DATEPOSTED_RE.search(html)
     if m:
@@ -421,7 +438,7 @@ def extract_posted_time_from_html(html: str, url: str) -> str | None:
     """
     Best-effort posted date from raw job page HTML.
     Ashby: __appData posting.updatedAt / publishedDate, then JSON-LD.
-    Others: JSON-LD JobPosting → Greenhouse published_at → __NEXT_DATA__ →
+    Others: JSON-LD JobPosting → Greenhouse __remixContext jobPost / published_at regex → __NEXT_DATA__ →
     Lever-style fields → generic "datePosted" in page → meta tags.
     """
     if not html or not html.strip():
@@ -433,7 +450,7 @@ def extract_posted_time_from_html(html: str, url: str) -> str | None:
         extractors.append(_ashby_app_data_posted_time)
     extractors.append(_json_ld_date_posted)
     if "greenhouse.io" in host:
-        extractors.append(_greenhouse_remix_date)
+        extractors.append(_greenhouse_posted_time_from_embedded)
     extractors.append(_next_data_date)
     if "lever.co" in host:
         extractors.append(_lever_embedded_date)
@@ -512,13 +529,16 @@ async def enrich_ats_jobs_posted_times(
 
     If ``playwright_context`` is None, falls back to parallel HTTP GET (urllib).
     Greenhouse board API rows usually already have posted_time and are skipped.
+    Greenhouse listing pages: HTTP pass parses ``window.__remixContext`` (new Remix job boards).
     """
     if not jobs:
         return jobs
 
     from parsers.ashby_http import enrich_ashby_jobs_via_http
+    from parsers.greenhouse_http import enrich_greenhouse_jobs_via_http
 
     await enrich_ashby_jobs_via_http(jobs, emit=emit)
+    await enrich_greenhouse_jobs_via_http(jobs, emit=emit)
 
     targets: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
