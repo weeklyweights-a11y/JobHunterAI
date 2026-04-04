@@ -60,7 +60,7 @@ def _title_font() -> Font:
 def _prepare_rows(
     jobs: list[dict[str, Any]],
 ) -> list[tuple[str, ...]]:
-    """Title, Company, Location, Seniority, Freshness, Posted Time, Applicant Count, Apply Type, Source, Job ID, Apply Link, Found At. (No job description — LLM-only.)"""
+    """Title, Company, Location, Salary, Employment type, Seniority, …, Apply Link, Found At."""
     rows: list[tuple[str, ...]] = []
     for j in jobs:
         src = _source_label(str(j.get("source") or ""))
@@ -70,6 +70,8 @@ def _prepare_rows(
                 str(j.get("title") or ""),
                 str(j.get("company") or ""),
                 str(j.get("location") or ""),
+                str(j.get("salary") or ""),
+                str(j.get("employment_type") or ""),
                 str(j.get("seniority") or ""),
                 str(j.get("freshness") or ""),
                 str(j.get("posted_time") or ""),
@@ -115,6 +117,8 @@ def write_jobs_xlsx(
         "Job Title",
         "Company",
         "Location",
+        "Salary",
+        "Employment Type",
         "Seniority",
         "Freshness",
         "Posted Time",
@@ -141,7 +145,7 @@ def write_jobs_xlsx(
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
     data_rows = _prepare_rows(jobs)
-    apply_col = 11
+    apply_col = 13
     for i, row_tuple in enumerate(data_rows):
         r = 4 + i
         fill = _ALT_ROW_FILLS[i % 2]
@@ -165,7 +169,7 @@ def write_jobs_xlsx(
                 cell = ws.cell(row=r, column=c_idx, value=val)
                 cell.font = _body_font()
                 # Force text so Excel does not parse ISO-8601 as broken date/time (e.g. ":51-04:00").
-                if c_idx in (6, 12):
+                if c_idx in (8, 14):
                     cell.number_format = "@"
             cell.fill = fill
             cell.alignment = Alignment(vertical="top", wrap_text=True)

@@ -60,11 +60,11 @@ def _parse_relevance_response(text: str) -> dict[int, bool]:
 def _experience_hint(exp: str) -> str:
     e = (exp or "any").strip().lower()
     if e == "any":
-        return "No fixed title-level target — judge each job on its own from the title."
+        return "No fixed title-level target — still apply the strict relevance rules below; when in doubt, say NO."
     return (
         f"The user selected experience level **{e}** in search settings. "
-        f"If the job title clearly targets a very different level (e.g. user wants senior but the title is Intern or Entry-level only), lean toward NO. "
-        f"If level is unclear from the title alone, still allow YES when the title matches the user's role keywords."
+        f"If the title clearly targets a very different level (e.g. intern vs senior), lean toward NO. "
+        f"When level is unclear from the title alone, default to NO unless the title clearly matches the user's AI/ML role intent."
     )
 
 
@@ -81,9 +81,14 @@ def _build_prompt(
         "",
         "For each numbered job below you have only TITLE and COMPANY (no full description).",
         "Decide if the job is **relevant** to my role intent from title and company name alone.",
-        "Be generous for AI/ML/data science/LLM/GenAI/research engineering / applied ML roles.",
-        "Say NO for clearly unrelated work suggested by the title (generic CRUD backend-only, pure frontend, "
-        "DevOps-only, QA, recruiting, sales, etc.) unless the title clearly suggests AI/ML or aligned work.",
+        "",
+        "**Strict rule — be strict, not generous. When in doubt, say NO.**",
+        "Only say YES if the job title **directly** relates to the user's search roles above.",
+        "If the user searched for AI/ML Engineer (or similar), say **NO** to: Data Engineer, Data Analyst, "
+        "DevOps Engineer, Platform Engineer, Backend Engineer, Frontend Engineer, QA Engineer, "
+        "Site Reliability Engineer — **unless** the title explicitly contains AI, ML, machine learning, "
+        "deep learning, NLP, computer vision, LLM, or GenAI keywords (or clear synonyms).",
+        "Generic software or infrastructure titles without those signals should be **NO**.",
         "",
         "Reply with EXACTLY one line per job, format:",
         "N YES",

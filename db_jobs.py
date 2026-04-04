@@ -40,6 +40,12 @@ def _job_row(row: aiosqlite.Row) -> dict[str, Any]:
         desc = str(row["job_description"])
     if "seniority" in keys and row["seniority"] is not None:
         sen = str(row["seniority"])
+    sal = ""
+    emp = ""
+    if "salary" in keys and row["salary"] is not None:
+        sal = str(row["salary"])
+    if "employment_type" in keys and row["employment_type"] is not None:
+        emp = str(row["employment_type"])
     return {
         "id": row["id"],
         "title": row["title"],
@@ -57,6 +63,8 @@ def _job_row(row: aiosqlite.Row) -> dict[str, Any]:
         "applicant_count": applicants,
         "job_description": desc,
         "seniority": sen,
+        "salary": sal,
+        "employment_type": emp,
     }
 
 
@@ -91,6 +99,8 @@ async def add_job(
     applicant_count: str | None = None,
     job_description: str | None = None,
     seniority: str | None = None,
+    salary: str | None = None,
+    employment_type: str | None = None,
     dedup_days: int = 7,
 ) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -99,8 +109,8 @@ async def add_job(
         await db.execute(
             """INSERT INTO jobs
             (title, company, url, source, apply_type, search_role, search_location, location, job_id,
-             posted_time, freshness, applicant_count, job_description, seniority)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             posted_time, freshness, applicant_count, job_description, seniority, salary, employment_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 title,
                 company,
@@ -116,6 +126,8 @@ async def add_job(
                 applicant_count,
                 job_description,
                 seniority,
+                salary,
+                employment_type,
             ),
         )
         await db.commit()
@@ -146,11 +158,13 @@ async def add_jobs_bulk(
             applicant_count = str(j.get("applicant_count") or "").strip() or None
             job_description = str(j.get("job_description") or "").strip() or None
             seniority = str(j.get("seniority") or "").strip() or None
+            salary = str(j.get("salary") or "").strip() or None
+            employment_type = str(j.get("employment_type") or "").strip() or None
             await db.execute(
                 """INSERT INTO jobs
                 (title, company, url, source, apply_type, search_role, search_location, found_at, location, job_id,
-                 posted_time, freshness, applicant_count, job_description, seniority)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 posted_time, freshness, applicant_count, job_description, seniority, salary, employment_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     j["title"],
                     j.get("company"),
@@ -167,6 +181,8 @@ async def add_jobs_bulk(
                     applicant_count,
                     job_description,
                     seniority,
+                    salary,
+                    employment_type,
                 ),
             )
             added += 1
@@ -187,6 +203,8 @@ async def add_jobs_bulk(
                     "applicant_count": str(j.get("applicant_count") or ""),
                     "job_description": str(j.get("job_description") or ""),
                     "seniority": str(j.get("seniority") or ""),
+                    "salary": str(j.get("salary") or ""),
+                    "employment_type": str(j.get("employment_type") or ""),
                 }
             )
         await db.commit()

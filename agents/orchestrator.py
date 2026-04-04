@@ -17,7 +17,7 @@ from output_util import OUTPUT_DIR
 from agents.ats import search_ats
 from agents.career_pages import search_career_pages
 from agents.indeed import search_indeed
-from agents.linkedin import search_linkedin
+from agents.linkedin import _merge_posting_locations, search_linkedin
 from db_paths import normalize_linkedin_employment_types
 from agents.llm_setup import build_chat_model
 from agents.relevance_filter import filter_relevant_jobs
@@ -72,6 +72,86 @@ def _make_emit(
     return emit, put_event
 
 
+def _cross_source_job_richness(job: dict[str, Any]) -> int:
+    """Prefer rows with posted_time, description, and LinkedIn-style freshness."""
+    n = 0
+    if str(job.get("posted_time") or "").strip():
+        n += 100
+    if str(job.get("job_description") or "").strip():
+        n += 10
+    if str(job.get("freshness") or "").strip():
+        n += 1
+    if str(job.get("salary") or "").strip():
+        n += 1
+    if str(job.get("employment_type") or "").strip():
+        n += 1
+    return n
+
+
+def dedupe_jobs_cross_source_title_company(
+    jobs: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """
+    One row per (title, company) across all sources. Merge pipe-separated locations.
+    Keep the richest row (posted_time, job_description, freshness, salary, …); fill missing fields from duplicates.
+    Returns (deduped_list, num_duplicates_removed).
+    """
+    key_order: list[tuple[str, str]] = []
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    unkeyed: list[dict[str, Any]] = []
+
+    for j in jobs:
+        t = str(j.get("title") or "").strip().lower()
+        c = str(j.get("company") or "").strip().lower()
+        if not t or not c:
+            unkeyed.append(j)
+            continue
+        k = (t, c)
+        if k not in groups:
+            key_order.append(k)
+            groups[k] = []
+        groups[k].append(j)
+
+    out: list[dict[str, Any]] = list(unkeyed)
+    removed = 0
+    for k in key_order:
+        items = groups[k]
+        if len(items) == 1:
+            out.append(items[0])
+            continue
+        seed = max(items, key=_cross_source_job_richness)
+        winner = dict(seed)
+        for it in items:
+            if not str(winner.get("posted_time") or "").strip() and str(
+                it.get("posted_time") or ""
+            ).strip():
+                winner["posted_time"] = str(it.get("posted_time") or "")
+            if not str(winner.get("job_description") or "").strip() and str(
+                it.get("job_description") or ""
+            ).strip():
+                winner["job_description"] = str(it.get("job_description") or "")
+            if not str(winner.get("freshness") or "").strip() and str(
+                it.get("freshness") or ""
+            ).strip():
+                winner["freshness"] = str(it.get("freshness") or "")
+            if not str(winner.get("salary") or "").strip() and str(
+                it.get("salary") or ""
+            ).strip():
+                winner["salary"] = str(it.get("salary") or "")
+            if not str(winner.get("employment_type") or "").strip() and str(
+                it.get("employment_type") or ""
+            ).strip():
+                winner["employment_type"] = str(it.get("employment_type") or "")
+        loc = ""
+        for it in items:
+            loc = _merge_posting_locations(loc, str(it.get("location") or "").strip())
+        winner["location"] = loc
+        removed += len(items) - 1
+        out.append(winner)
+
+    return out, removed
+
+
 def _by_source_counts_new(new_jobs: list[dict[str, Any]]) -> dict[str, int]:
     keys = ("linkedin", "indeed", "ats", "yc", "career_page")
     out = {k: 0 for k in keys}
@@ -101,6 +181,8 @@ def _enrich(jobs: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
                 "applicant_count": str(j.get("applicant_count") or ""),
                 "job_description": str(j.get("job_description") or ""),
                 "seniority": str(j.get("seniority") or ""),
+                "salary": str(j.get("salary") or ""),
+                "employment_type": str(j.get("employment_type") or ""),
             }
         )
     return out
@@ -274,6 +356,15 @@ async def run_hunt(
         emit=emit,
         enabled=bool(cfg.get("filter_jobs_by_relevance_llm", True)),
     )
+
+    all_jobs, n_xs_dup = dedupe_jobs_cross_source_title_company(all_jobs)
+    if n_xs_dup:
+        msg = (
+            f"Cross-source dedup: removed {n_xs_dup} duplicates "
+            f"(same title+company across sources)."
+        )
+        logger.info("%s %s job row(s) after dedup.", msg, len(all_jobs))
+        await emit(f"{msg} {len(all_jobs)} job row(s) left.")
 
     total_found = len(all_jobs)
     run_ts = datetime.now().isoformat(timespec="seconds")

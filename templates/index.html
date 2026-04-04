@@ -179,7 +179,7 @@
                 <p class="help-text" id="llm-key-hint">Gemini/OpenAI/Anthropic need a valid API key. If you see “API key not valid” in the server log, paste a new key and Save.</p>
                 <div class="field-group">
                     <label class="toggle"><input type="checkbox" id="filter-relevance-llm" checked><span class="toggle-ui"></span><span>Filter by relevance (LLM)</span></label>
-                    <p class="help-text">After all sources finish, the LLM uses each job’s <strong>title and company</strong> only (no description), decides YES/NO relevance to your roles, and uses your <strong>Experience</strong> setting when it’s not “any” as a hint from the title. It does <strong>not</strong> set seniority. Requires a working LLM; turn off to keep every scraped row.</p>
+                    <p class="help-text">After all sources finish, the LLM uses each job’s <strong>title and company</strong> only (no description) with a <strong>strict</strong> YES/NO bar for your roles (generic data/platform/backend titles are dropped unless they clearly mention AI/ML signals). Your <strong>Experience</strong> setting is a hint when it’s not “any”. It does <strong>not</strong> set seniority. Requires a working LLM; turn off to keep every scraped row.</p>
                 </div>
             </section>
 
@@ -263,6 +263,8 @@
                             <th>Title</th>
                             <th>Company</th>
                             <th>Location</th>
+                            <th>Salary</th>
+                            <th>Employment</th>
                             <th>Seniority</th>
                             <th>Freshness</th>
                             <th>Applicants</th>

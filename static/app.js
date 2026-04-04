@@ -686,6 +686,15 @@ function renderJobs(jobs) {
         tdLoc.textContent = job.location != null ? String(job.location) : "";
         tr.appendChild(tdLoc);
 
+        const tdSal = document.createElement("td");
+        tdSal.textContent = job.salary != null ? String(job.salary) : "";
+        tr.appendChild(tdSal);
+
+        const tdEmp = document.createElement("td");
+        tdEmp.textContent =
+            job.employment_type != null ? String(job.employment_type) : "";
+        tr.appendChild(tdEmp);
+
         const tdSen = document.createElement("td");
         tdSen.textContent = job.seniority != null ? String(job.seniority) : "";
         tr.appendChild(tdSen);

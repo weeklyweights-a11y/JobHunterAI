@@ -303,17 +303,117 @@ def _ashby_app_data_posted_time(html: str) -> str | None:
 
 
 def _lever_embedded_date(html: str) -> str | None:
-    # Lever sometimes exposes listCreatedAt / createdAt in a JSON blob
+    # Lever boards often embed ISO timestamps in the page JSON
     for pat in (
         r'"listCreatedAt"\s*:\s*"([^"]+)"',
-        r'"createdAt"\s*:\s*"([^"]+)"',
         r'"postedAt"\s*:\s*"([^"]+)"',
+        r'"createdAt"\s*:\s*"([^"]+)"',
+        r'"updatedAt"\s*:\s*"([^"]+)"',
     ):
         m = re.search(pat, html, re.I)
         if m:
             v = _normalize_date_value(m.group(1))
             if v and _looks_isoish(v):
                 return v
+    return None
+
+
+def _relative_posted_phrase_to_iso_date(blob: str) -> str | None:
+    """
+    Map visible phrases like 'Posted 5 days ago' to a calendar date (UTC).
+    Conservative caps so absurd numbers do not skew dates.
+    """
+    low = blob.lower()
+    m = re.search(
+        r"(?:posted|published|reposted)\s*[:\s,.-]*(\d+)\s+hours?\s+ago",
+        low,
+    )
+    if m:
+        h = min(int(m.group(1)), 24 * 180)
+        d = datetime.now(timezone.utc) - timedelta(hours=h)
+        return d.date().isoformat()
+    m = re.search(
+        r"(?:posted|published|reposted)\s*[:\s,.-]*(\d+)\s+days?\s+ago",
+        low,
+    )
+    if m:
+        days = min(int(m.group(1)), 730)
+        d = datetime.now(timezone.utc) - timedelta(days=days)
+        return d.date().isoformat()
+    m = re.search(
+        r"(?:posted|published)\s*[:\s,.-]*(\d+)\s+weeks?\s+ago",
+        low,
+    )
+    if m:
+        w = min(int(m.group(1)), 104)
+        d = datetime.now(timezone.utc) - timedelta(weeks=w)
+        return d.date().isoformat()
+    m = re.search(
+        r"(?:posted|published)\s*[:\s,.-]*(\d+)\s+months?\s+ago",
+        low,
+    )
+    if m:
+        mo = min(int(m.group(1)), 24)
+        d = datetime.now(timezone.utc) - timedelta(days=mo * 30)
+        return d.date().isoformat()
+    return None
+
+
+def _dom_visible_posted_heuristic(html: str) -> str | None:
+    """
+    DOM / visible-text fallback for Lever, Ashby, and other ATS pages where JSON-LD
+    is missing but the UI shows 'Posted … ago' or a date near 'posted' / 'published'.
+    """
+    if not html or not html.strip():
+        return None
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
+        soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    text = soup.get_text("\n", strip=True)
+    if not text:
+        return None
+    blob = " ".join(text.split())
+    if len(blob) > 150_000:
+        blob = blob[:150_000]
+
+    for m in re.finditer(
+        r"(?:posted|published|posting\s+date|date\s+posted|job\s+posted)\s*"
+        r"[:#\s,.-–—]*(\d{4}-\d{2}-\d{2})",
+        blob,
+        re.I,
+    ):
+        ok = accept_normalized_posted_string(m.group(1))
+        if ok:
+            return ok
+
+    rel = _relative_posted_phrase_to_iso_date(blob)
+    if rel:
+        ok = accept_normalized_posted_string(rel)
+        if ok:
+            return ok
+
+    head = blob[:40_000]
+    for m in re.finditer(r"\b(20[12]\d-\d{2}-\d{2})\b", head):
+        start = max(0, m.start() - 100)
+        window = head[start : m.end() + 60].lower()
+        if any(
+            k in window
+            for k in (
+                "posted",
+                "published",
+                "publish",
+                "date",
+                "listing",
+                "opening",
+                "job",
+            )
+        ):
+            ok = accept_normalized_posted_string(m.group(1))
+            if ok:
+                return ok
     return None
 
 
@@ -349,6 +449,16 @@ def extract_posted_time_from_html(html: str, url: str) -> str | None:
             ok = accept_normalized_posted_string(got)
             if ok:
                 return ok
+
+    try:
+        dom_got = _dom_visible_posted_heuristic(html)
+    except Exception:
+        logger.debug("ats_posted_time DOM heuristic error url=%s", url, exc_info=True)
+        dom_got = None
+    if dom_got:
+        ok = accept_normalized_posted_string(dom_got)
+        if ok:
+            return ok
 
     if "workable.com" in host:
         m = re.search(r'"published_at"\s*:\s*"([^"]+)"', html, re.I)
@@ -405,6 +515,10 @@ async def enrich_ats_jobs_posted_times(
     """
     if not jobs:
         return jobs
+
+    from parsers.ashby_http import enrich_ashby_jobs_via_http
+
+    await enrich_ashby_jobs_via_http(jobs, emit=emit)
 
     targets: list[dict[str, Any]] = []
     seen_urls: set[str] = set()

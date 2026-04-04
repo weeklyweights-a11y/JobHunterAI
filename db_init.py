@@ -89,6 +89,15 @@ async def _migrate_jobs_description_seniority(db: aiosqlite.Connection) -> None:
         await db.execute("ALTER TABLE jobs ADD COLUMN seniority TEXT")
 
 
+async def _migrate_jobs_salary_employment(db: aiosqlite.Connection) -> None:
+    cur = await db.execute("PRAGMA table_info(jobs)")
+    cols = {row[1] for row in await cur.fetchall()}
+    if "salary" not in cols:
+        await db.execute("ALTER TABLE jobs ADD COLUMN salary TEXT")
+    if "employment_type" not in cols:
+        await db.execute("ALTER TABLE jobs ADD COLUMN employment_type TEXT")
+
+
 async def init_db() -> None:
     ensure_data_dir()
     d = DEFAULT_CONFIG
@@ -144,6 +153,7 @@ async def init_db() -> None:
         await _migrate_jobs_location_job_id(db)
         await _migrate_jobs_linkedin_detail(db)
         await _migrate_jobs_description_seniority(db)
+        await _migrate_jobs_salary_employment(db)
 
         cur = await db.execute("SELECT COUNT(*) FROM config WHERE id = 1")
         row = await cur.fetchone()
