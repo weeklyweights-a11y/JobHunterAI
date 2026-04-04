@@ -46,6 +46,17 @@
                         <option value="lead">Lead / Principal</option>
                     </select>
                 </div>
+                <div class="field-group">
+                    <span class="field-label" id="employment-type-label">Employment type (LinkedIn)</span>
+                    <p class="help-text">Select one or more. With <strong>Internship</strong> checked, experience words are not added to keywords and LinkedIn’s experience filter (<code>f_E</code>) is omitted. For full-time only, experience level applies as usual.</p>
+                    <div class="toggle-row" role="group" aria-labelledby="employment-type-label">
+                        <label class="toggle"><input type="checkbox" id="jt-internship" data-jt="I"><span class="toggle-ui"></span><span>Internship</span></label>
+                        <label class="toggle"><input type="checkbox" id="jt-fulltime" data-jt="F" checked><span class="toggle-ui"></span><span>Full-time</span></label>
+                        <label class="toggle"><input type="checkbox" id="jt-parttime" data-jt="P"><span class="toggle-ui"></span><span>Part-time</span></label>
+                        <label class="toggle"><input type="checkbox" id="jt-contract" data-jt="C"><span class="toggle-ui"></span><span>Contract</span></label>
+                        <label class="toggle"><input type="checkbox" id="jt-volunteer" data-jt="V"><span class="toggle-ui"></span><span>Volunteer</span></label>
+                    </div>
+                </div>
             </section>
 
             <section class="form-section" aria-labelledby="sources-heading">
@@ -53,8 +64,38 @@
                 <div class="toggle-row" role="group" aria-label="Job sources">
                     <label class="toggle"><input type="checkbox" id="src-linkedin" checked data-source-key="linkedin"><span class="toggle-ui"></span><span>LinkedIn</span></label>
                     <label class="toggle"><input type="checkbox" id="src-indeed" checked data-source-key="indeed"><span class="toggle-ui"></span><span>Indeed</span></label>
+                    <label class="toggle"><input type="checkbox" id="src-ats" data-source-key="ats"><span class="toggle-ui"></span><span>ATS Platforms</span></label>
                     <label class="toggle"><input type="checkbox" id="src-yc" checked data-source-key="yc"><span class="toggle-ui"></span><span>YC Work at a Startup</span></label>
                     <label class="toggle"><input type="checkbox" id="src-career" checked data-source-key="career_page"><span class="toggle-ui"></span><span>Custom Career Pages</span></label>
+                </div>
+                <div class="field-group">
+                    <label class="field-label">ATS platform filters</label>
+                    <div class="toggle-row" role="group" aria-label="ATS platforms">
+                        <label class="toggle"><input type="checkbox" id="ats-greenhouse" checked><span class="toggle-ui"></span><span>Greenhouse</span></label>
+                        <label class="toggle"><input type="checkbox" id="ats-lever" checked><span class="toggle-ui"></span><span>Lever</span></label>
+                        <label class="toggle"><input type="checkbox" id="ats-ashby" checked><span class="toggle-ui"></span><span>Ashby</span></label>
+                        <label class="toggle"><input type="checkbox" id="ats-smartrecruiters" checked><span class="toggle-ui"></span><span>SmartRecruiters</span></label>
+                        <label class="toggle"><input type="checkbox" id="ats-workable" checked><span class="toggle-ui"></span><span>Workable</span></label>
+                        <label class="toggle"><input type="checkbox" id="ats-workday" checked><span class="toggle-ui"></span><span>Workday</span></label>
+                        <label class="toggle"><input type="checkbox" id="ats-jobvite" checked><span class="toggle-ui"></span><span>Jobvite</span></label>
+                        <label class="toggle"><input type="checkbox" id="ats-bamboohr" checked><span class="toggle-ui"></span><span>BambooHR</span></label>
+                        <label class="toggle"><input type="checkbox" id="ats-icims" checked><span class="toggle-ui"></span><span>iCIMS</span></label>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="ats-posted-within-days">ATS listings: only keep jobs posted within (days)</label>
+                        <input type="number" id="ats-posted-within-days" class="text-input" min="0" max="365" value="7" step="1">
+                        <p class="help-text">Uses each job page’s posted date (fetched after Google finds links). <strong>0</strong> = no age filter. Separate from URL dedup below.</p>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="ats-google-max-serp-pages">Max Google result pages per ATS search</label>
+                        <input type="number" id="ats-google-max-serp-pages" class="text-input" min="1" max="50" value="20" step="1">
+                        <p class="help-text">Each page is up to ~10 links. Stops early if a page adds no new URLs. Higher = slower and more CAPTCHA risk.</p>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="ats-captcha-wait-seconds">Google CAPTCHA wait (seconds)</label>
+                        <input type="number" id="ats-captcha-wait-seconds" class="text-input" min="30" max="900" value="180" step="10">
+                        <p class="help-text">If Google shows a CAPTCHA, the run waits this long for you to solve it in the browser. If it is still blocked after that, ATS stops searching Google but keeps every job URL found so far and still merges them into the same Excel report as LinkedIn and other sources.</p>
+                    </div>
                 </div>
             </section>
 
@@ -89,6 +130,35 @@
                 </div>
             </section>
 
+            <section class="form-section" aria-labelledby="linkedin-login-heading">
+                <h3 id="linkedin-login-heading" class="section-heading">LinkedIn sign-in (job search)</h3>
+                <p class="help-text">Saved here for the browser agent only. Prefer an <strong>app-specific password</strong> or a dedicated account; storing passwords has risk. 2FA may still require you to approve in the browser.</p>
+                <div class="field-group">
+                    <label class="field-label" for="linkedin-email">LinkedIn email or phone</label>
+                    <input type="text" id="linkedin-email" class="text-input" placeholder="you@email.com" autocomplete="username">
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="linkedin-password">LinkedIn password</label>
+                    <input type="password" id="linkedin-password" class="text-input" placeholder="Leave blank to keep saved password" autocomplete="new-password">
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="linkedin-posted-window">Job age on LinkedIn</label>
+                    <select id="linkedin-posted-window" class="select-input" aria-describedby="linkedin-posted-window-help">
+                        <option value="24h" selected>Last 24 hours only (default)</option>
+                        <option value="week">Past week (7 days)</option>
+                    </select>
+                    <p class="help-text" id="linkedin-posted-window-help">Controls the LinkedIn time filter and which postings pass freshness. <strong>Reposted — …</strong> is shown only when LinkedIn marks a repost and the URL is new to your DB or different from the same title+company you already stored — and only if you enable reposts below.</p>
+                </div>
+                <div class="field-group">
+                    <label class="toggle"><input type="checkbox" id="linkedin-include-reposts"><span class="toggle-ui"></span><span>Include reposted listings</span></label>
+                    <p class="help-text">Off (default): skip jobs LinkedIn labels as reposts so they never appear in results or the DB. On: collect them; freshness shows <strong>Reposted — …</strong>.</p>
+                </div>
+                <div class="field-group">
+                    <label class="toggle"><input type="checkbox" id="linkedin-include-easy-apply"><span class="toggle-ui"></span><span>Include Easy Apply jobs</span></label>
+                    <p class="help-text">Off (default): skip jobs that show an Easy Apply badge; promoted and other external listings are still collected. On: collect all jobs; the report still tags each row as easy_apply or external.</p>
+                </div>
+            </section>
+
             <section class="form-section" aria-labelledby="llm-heading">
                 <h3 id="llm-heading" class="section-heading">LLM provider</h3>
                 <div class="field-group">
@@ -107,6 +177,10 @@
                 </div>
                 <p class="help-text hidden" id="ollama-hint">Make sure Ollama is running locally.</p>
                 <p class="help-text" id="llm-key-hint">Gemini/OpenAI/Anthropic need a valid API key. If you see “API key not valid” in the server log, paste a new key and Save.</p>
+                <div class="field-group">
+                    <label class="toggle"><input type="checkbox" id="filter-relevance-llm" checked><span class="toggle-ui"></span><span>Filter by relevance (LLM)</span></label>
+                    <p class="help-text">After all sources finish, the LLM uses each job’s <strong>title and company</strong> only (no description), decides YES/NO relevance to your roles, and uses your <strong>Experience</strong> setting when it’s not “any” as a hint from the title. It does <strong>not</strong> set seniority. Requires a working LLM; turn off to keep every scraped row.</p>
+                </div>
             </section>
 
             <section class="form-section" aria-labelledby="browser-heading">
@@ -119,8 +193,24 @@
                 <p class="help-text">To reuse <strong>this</strong> Chrome (automation opens <strong>new tabs</strong> here, not another app): (1) Quit every Chrome window. (2) Start Chrome with debugging, e.g. <code>"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222</code>. (3) In <em>that</em> window only, open this dashboard. (4) Paste <code>http://127.0.0.1:9222</code> above, Save settings, then Start Hunting.</p>
             </section>
 
+            <section class="form-section" aria-labelledby="dedup-heading">
+                <h3 id="dedup-heading" class="section-heading">Deduplication</h3>
+                <div class="field-group">
+                    <label class="field-label" for="dedup-days">Skip same job URL if seen within (days)</label>
+                    <input type="number" id="dedup-days" class="text-input" min="1" max="365" value="7" step="1">
+                    <p class="help-text">Rolling window (default 7). Jobs older than 30 days are removed automatically.</p>
+                </div>
+            </section>
+
             <section class="form-section" aria-labelledby="schedule-heading">
                 <h3 id="schedule-heading" class="section-heading">Schedule</h3>
+                <div class="field-group">
+                    <label class="toggle">
+                        <input type="checkbox" id="auto-run-enabled" checked>
+                        <span class="toggle-ui"></span>
+                        <span>Enable auto-run scheduler</span>
+                    </label>
+                </div>
                 <div class="field-group">
                     <label class="field-label" for="schedule-hours">Run every</label>
                     <select id="schedule-hours" class="select-input">
@@ -172,8 +262,12 @@
                         <tr>
                             <th>Title</th>
                             <th>Company</th>
+                            <th>Location</th>
+                            <th>Seniority</th>
+                            <th>Freshness</th>
+                            <th>Applicants</th>
                             <th>Source</th>
-                            <th>Found</th>
+                            <th>Description</th>
                             <th>Link</th>
                         </tr>
                     </thead>

@@ -18,6 +18,8 @@ const state = {
     customSites: [],
     jobsFilter: "all",
     jobFoundCount: 0,
+    saving: false,
+    starting: false,
 };
 
 let huntEventSource = null;
@@ -124,7 +126,7 @@ function renderUrlList(listId, urls, onRemove) {
 }
 
 function setSourcesFromData(sources) {
-    const keys = ["linkedin", "indeed", "yc", "career_page"];
+    const keys = ["linkedin", "indeed", "ats", "yc", "career_page"];
     keys.forEach(function (key) {
         const cb = document.querySelector('input[data-source-key="' + key + '"]');
         if (cb) {
@@ -137,8 +139,43 @@ function getSourcesPayload() {
     return {
         linkedin: document.getElementById("src-linkedin").checked,
         indeed: document.getElementById("src-indeed").checked,
+        ats: document.getElementById("src-ats").checked,
         yc: document.getElementById("src-yc").checked,
         career_page: document.getElementById("src-career").checked,
+    };
+}
+
+const LINKEDIN_JT_ORDER = [
+    ["jt-internship", "I"],
+    ["jt-fulltime", "F"],
+    ["jt-parttime", "P"],
+    ["jt-contract", "C"],
+    ["jt-volunteer", "V"],
+];
+
+function getLinkedinEmploymentTypesPayload() {
+    const out = [];
+    LINKEDIN_JT_ORDER.forEach(function (pair) {
+        const el = document.getElementById(pair[0]);
+        if (el && el.checked) {
+            out.push(pair[1]);
+        }
+    });
+    return out.length ? out : ["F"];
+}
+
+function getAtsPlatformsPayload() {
+    return {
+        greenhouse: !!document.getElementById("ats-greenhouse")?.checked,
+        lever: !!document.getElementById("ats-lever")?.checked,
+        ashby: !!document.getElementById("ats-ashby")?.checked,
+        smartrecruiters: !!document.getElementById("ats-smartrecruiters")?.checked,
+        workable: !!document.getElementById("ats-workable")?.checked,
+        workable_apply: !!document.getElementById("ats-workable")?.checked,
+        workday: !!document.getElementById("ats-workday")?.checked,
+        jobvite: !!document.getElementById("ats-jobvite")?.checked,
+        bamboohr: !!document.getElementById("ats-bamboohr")?.checked,
+        icims: !!document.getElementById("ats-icims")?.checked,
     };
 }
 
@@ -154,11 +191,60 @@ function buildSettingsPayload(includeSecretsIfPresent) {
         career_pages: state.careerPages,
         custom_sites: state.customSites,
         schedule_hours: Number(document.getElementById("schedule-hours").value),
+        dedup_days: (function () {
+            const el = document.getElementById("dedup-days");
+            if (!el) {
+                return 7;
+            }
+            const n = Number(el.value);
+            return Number.isFinite(n) ? Math.max(1, Math.min(365, n)) : 7;
+        })(),
+        ats_posted_within_days: (function () {
+            const el = document.getElementById("ats-posted-within-days");
+            if (!el) {
+                return 7;
+            }
+            const n = Number(el.value);
+            return Number.isFinite(n) ? Math.max(0, Math.min(365, n)) : 7;
+        })(),
+        ats_google_max_serp_pages: (function () {
+            const el = document.getElementById("ats-google-max-serp-pages");
+            if (!el) {
+                return 20;
+            }
+            const n = Number(el.value);
+            return Number.isFinite(n) ? Math.max(1, Math.min(50, n)) : 20;
+        })(),
+        ats_captcha_wait_seconds: (function () {
+            const el = document.getElementById("ats-captcha-wait-seconds");
+            if (!el) {
+                return 180;
+            }
+            const n = Number(el.value);
+            return Number.isFinite(n) ? Math.max(30, Math.min(900, n)) : 180;
+        })(),
+        auto_run_enabled: !!document.getElementById("auto-run-enabled").checked,
         llm_provider: provider,
         browser_cdp_url: (function () {
             const el = document.getElementById("browser-cdp-url");
             return el && el.value ? el.value.trim() : "";
         })(),
+        linkedin_email: (function () {
+            const el = document.getElementById("linkedin-email");
+            return el && el.value ? el.value.trim() : "";
+        })(),
+        linkedin_include_easy_apply: !!document.getElementById("linkedin-include-easy-apply")?.checked,
+        linkedin_include_reposts: !!document.getElementById("linkedin-include-reposts")?.checked,
+        linkedin_posted_past_week: (function () {
+            const el = document.getElementById("linkedin-posted-window");
+            if (!el) {
+                return false;
+            }
+            return el.value === "week";
+        })(),
+        linkedin_employment_types: getLinkedinEmploymentTypesPayload(),
+        filter_jobs_by_relevance_llm: !!document.getElementById("filter-relevance-llm")?.checked,
+        ats_platforms: getAtsPlatformsPayload(),
     };
     if (includeSecretsIfPresent) {
         const ep = document.getElementById("email-password").value;
@@ -168,6 +254,10 @@ function buildSettingsPayload(includeSecretsIfPresent) {
         const lk = document.getElementById("llm-api-key").value;
         if (lk && provider !== "ollama") {
             payload.llm_api_key = lk;
+        }
+        const lip = document.getElementById("linkedin-password");
+        if (lip && lip.value) {
+            payload.linkedin_password = lip.value;
         }
     }
     return payload;
@@ -205,11 +295,77 @@ async function loadConfig() {
     renderLocationChips();
 
     document.getElementById("experience-select").value = data.experience || "any";
+    const jtList = data.linkedin_employment_types;
+    const want = new Set(
+        Array.isArray(jtList)
+            ? jtList.map(function (x) {
+                  return String(x).trim().toUpperCase();
+              })
+            : ["F"]
+    );
+    LINKEDIN_JT_ORDER.forEach(function (pair) {
+        const el = document.getElementById(pair[0]);
+        if (el) {
+            el.checked = want.has(pair[1]);
+        }
+    });
+    if (!LINKEDIN_JT_ORDER.some(function (pair) {
+        const el = document.getElementById(pair[0]);
+        return el && el.checked;
+    })) {
+        const ft = document.getElementById("jt-fulltime");
+        if (ft) {
+            ft.checked = true;
+        }
+    }
     setSourcesFromData(data.sources || {});
     document.getElementById("email-address").value = data.email_address || "";
     document.getElementById("email-password").value = "";
+    const liEm = document.getElementById("linkedin-email");
+    if (liEm) {
+        liEm.value = data.linkedin_email || "";
+    }
+    const liPw = document.getElementById("linkedin-password");
+    if (liPw) {
+        liPw.value = "";
+    }
+    const liEa = document.getElementById("linkedin-include-easy-apply");
+    if (liEa) {
+        liEa.checked = !!data.linkedin_include_easy_apply;
+    }
+    const liRep = document.getElementById("linkedin-include-reposts");
+    if (liRep) {
+        liRep.checked = !!data.linkedin_include_reposts;
+    }
+    const liWin = document.getElementById("linkedin-posted-window");
+    if (liWin) {
+        liWin.value = data.linkedin_posted_past_week ? "week" : "24h";
+    }
+    const ap = data.ats_platforms || {};
+    const atsMap = {
+        "ats-greenhouse": "greenhouse",
+        "ats-lever": "lever",
+        "ats-ashby": "ashby",
+        "ats-smartrecruiters": "smartrecruiters",
+        "ats-workable": "workable",
+        "ats-workday": "workday",
+        "ats-jobvite": "jobvite",
+        "ats-bamboohr": "bamboohr",
+        "ats-icims": "icims",
+    };
+    Object.keys(atsMap).forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) {
+            const key = atsMap[id];
+            el.checked = ap[key] !== false;
+        }
+    });
     document.getElementById("llm-provider").value = data.llm_provider || "gemini";
     document.getElementById("llm-api-key").value = "";
+    const frEl = document.getElementById("filter-relevance-llm");
+    if (frEl) {
+        frEl.checked = data.filter_jobs_by_relevance_llm !== false;
+    }
     const cdpEl = document.getElementById("browser-cdp-url");
     if (cdpEl) {
         cdpEl.value = data.browser_cdp_url || "";
@@ -221,6 +377,40 @@ async function loadConfig() {
         sh = 4;
     }
     document.getElementById("schedule-hours").value = String(sh);
+    const dedupEl = document.getElementById("dedup-days");
+    if (dedupEl) {
+        let dd = Number(data.dedup_days);
+        if (!Number.isFinite(dd)) {
+            dd = 7;
+        }
+        dedupEl.value = String(Math.max(1, Math.min(365, dd)));
+    }
+    const atsAgeEl = document.getElementById("ats-posted-within-days");
+    if (atsAgeEl) {
+        let ad = Number(data.ats_posted_within_days);
+        if (!Number.isFinite(ad)) {
+            ad = 7;
+        }
+        atsAgeEl.value = String(Math.max(0, Math.min(365, ad)));
+    }
+    const atsSerpEl = document.getElementById("ats-google-max-serp-pages");
+    if (atsSerpEl) {
+        let sp = Number(data.ats_google_max_serp_pages);
+        if (!Number.isFinite(sp)) {
+            sp = 20;
+        }
+        atsSerpEl.value = String(Math.max(1, Math.min(50, sp)));
+    }
+    const atsCapEl = document.getElementById("ats-captcha-wait-seconds");
+    if (atsCapEl) {
+        let cw = Number(data.ats_captcha_wait_seconds);
+        if (!Number.isFinite(cw)) {
+            cw = 180;
+        }
+        atsCapEl.value = String(Math.max(30, Math.min(900, cw)));
+    }
+    document.getElementById("auto-run-enabled").checked =
+        data.auto_run_enabled !== false;
 
     renderUrlList("career-url-list", state.careerPages, removeCareerUrl);
     renderUrlList("custom-url-list", state.customSites, removeCustomUrl);
@@ -347,6 +537,14 @@ async function validateLlmKey() {
 
 async function saveSettings(e) {
     e.preventDefault();
+    if (state.saving) {
+        return;
+    }
+    state.saving = true;
+    const saveBtn = document.getElementById("save-settings-btn");
+    if (saveBtn) {
+        saveBtn.disabled = true;
+    }
     const payload = buildSettingsPayload(true);
     try {
         const res = await apiJson("/api/config", {
@@ -356,6 +554,10 @@ async function saveSettings(e) {
         });
         document.getElementById("email-password").value = "";
         document.getElementById("llm-api-key").value = "";
+        const liPwEl = document.getElementById("linkedin-password");
+        if (liPwEl) {
+            liPwEl.value = "";
+        }
         showToast("Settings saved.", "success");
         if (res.meta && res.meta.scheduler_activated) {
             showToast(
@@ -368,6 +570,11 @@ async function saveSettings(e) {
         await loadSchedulerStatus();
     } catch (err) {
         showToast(err.message, "error");
+    } finally {
+        state.saving = false;
+        if (saveBtn) {
+            saveBtn.disabled = false;
+        }
     }
 }
 
@@ -375,6 +582,16 @@ function sourceDisplayName(source) {
     const m = {
         linkedin: "LinkedIn",
         indeed: "Indeed",
+        ats: "ATS",
+        greenhouse: "Greenhouse",
+        lever: "Lever",
+        ashby: "Ashby",
+        smartrecruiters: "SmartRecruiters",
+        workable: "Workable",
+        workday: "Workday",
+        jobvite: "Jobvite",
+        bamboohr: "BambooHR",
+        icims: "iCIMS",
         yc: "YC",
         career_page: "Career Page",
     };
@@ -423,6 +640,23 @@ function formatDurationSeconds(sec) {
     return m + "m " + s + "s";
 }
 
+function freshnessCellClass(freshness) {
+    if (freshness == null || freshness === "") {
+        return "freshness-cell";
+    }
+    const s = String(freshness);
+    if (s === "Fresh") {
+        return "freshness-cell freshness-cell--fresh";
+    }
+    if (s === "1 day ago" || s === "2 days ago") {
+        return "freshness-cell freshness-cell--recent";
+    }
+    if (s.indexOf("Reposted") === 0) {
+        return "freshness-cell freshness-cell--reposted";
+    }
+    return "freshness-cell";
+}
+
 function renderJobs(jobs) {
     const tbody = document.getElementById("jobs-tbody");
     const card = document.querySelector(".jobs-card");
@@ -448,13 +682,39 @@ function renderJobs(jobs) {
         tdCo.textContent = job.company != null ? String(job.company) : "";
         tr.appendChild(tdCo);
 
+        const tdLoc = document.createElement("td");
+        tdLoc.textContent = job.location != null ? String(job.location) : "";
+        tr.appendChild(tdLoc);
+
+        const tdSen = document.createElement("td");
+        tdSen.textContent = job.seniority != null ? String(job.seniority) : "";
+        tr.appendChild(tdSen);
+
+        const tdFresh = document.createElement("td");
+        tdFresh.textContent = job.freshness != null ? String(job.freshness) : "";
+        tdFresh.className = freshnessCellClass(job.freshness);
+        tr.appendChild(tdFresh);
+
+        const tdApp = document.createElement("td");
+        tdApp.textContent =
+            job.applicant_count != null ? String(job.applicant_count) : "";
+        tr.appendChild(tdApp);
+
         const tdSrc = document.createElement("td");
         tdSrc.textContent = sourceDisplayName(job.source || "");
         tr.appendChild(tdSrc);
 
-        const tdFound = document.createElement("td");
-        tdFound.textContent = formatRelativeTime(job.found_at);
-        tr.appendChild(tdFound);
+        const tdDesc = document.createElement("td");
+        const fullDesc =
+            job.job_description != null ? String(job.job_description) : "";
+        tdDesc.title = fullDesc;
+        tdDesc.className = "jobs-desc-preview";
+        if (fullDesc.length > 200) {
+            tdDesc.textContent = fullDesc.slice(0, 197) + "…";
+        } else {
+            tdDesc.textContent = fullDesc;
+        }
+        tr.appendChild(tdDesc);
 
         const tdLink = document.createElement("td");
         const a = document.createElement("a");
@@ -534,7 +794,11 @@ function renderSchedulerStatus(data) {
     badge.classList.toggle("scheduler-badge--on", active);
     badge.classList.toggle("scheduler-badge--off", !active);
     if (!active) {
-        nextEl.textContent = "Auto-run disabled (incomplete config)";
+        if (d.reason === "disabled_by_user") {
+            nextEl.textContent = "Auto-run disabled in settings";
+        } else {
+            nextEl.textContent = "Auto-run disabled (incomplete config)";
+        }
         return;
     }
     if (d.next_run) {
@@ -708,6 +972,14 @@ function handleSsePayload(type, rawData) {
 }
 
 async function startHunt() {
+    if (state.starting) {
+        return;
+    }
+    state.starting = true;
+    const startBtn = document.getElementById("btn-start-hunt");
+    if (startBtn) {
+        startBtn.disabled = true;
+    }
     try {
         await apiJson("/api/config", {
             method: "POST",
@@ -730,6 +1002,11 @@ async function startHunt() {
         } else {
             showToast(m, "error");
         }
+    } finally {
+        state.starting = false;
+        if (startBtn) {
+            startBtn.disabled = false;
+        }
     }
 }
 
@@ -750,6 +1027,7 @@ async function syncStatus() {
     try {
         const res = await apiJson("/api/status", { method: "GET" });
         const d = res.data || {};
+        setHuntButtonsRunning(d.state === "running");
         const log = document.getElementById("status-log");
         if (log && log.childElementCount === 0 && d.progress) {
             appendLogLine(d.progress, "default");
@@ -774,6 +1052,16 @@ function wireFilters() {
 
 document.addEventListener("DOMContentLoaded", function () {
     document.body.classList.add("config-loaded");
+
+    fetch("/api/health")
+        .then(function (r) {
+            return r.json().then(function (body) {
+                console.log("/api/health", r.status, body);
+            });
+        })
+        .catch(function (e) {
+            console.warn("/api/health failed", e);
+        });
 
     wireTagInput("role-input", "role-add-btn", "roles", renderRoleChips);
     wireTagInput("location-input", "location-add-btn", "locations", renderLocationChips);
@@ -827,5 +1115,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
     setInterval(function () {
         loadSchedulerStatus();
+        syncStatus();
     }, 60000);
 });

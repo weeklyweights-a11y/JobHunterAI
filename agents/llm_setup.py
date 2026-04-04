@@ -100,6 +100,22 @@ def build_chat_model(provider: str, api_key: str | None) -> BaseChatModel:
     raise ValueError(f"Unknown LLM provider: {provider}")
 
 
+def is_llm_configured_for_filter(provider: str, api_key: str | None) -> bool:
+    """True if we can build a chat model for post-scrape relevance filtering (title+company)."""
+    p = (provider or "gemini").strip().lower()
+    if p == "ollama":
+        return True
+    if p == "gemini":
+        if _gemini_backend() in ("vertex", "vertexai", "gcp"):
+            return bool(
+                (os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT") or "").strip()
+            )
+        return bool((_env_fallback_key(p) or "").strip() or (api_key or "").strip())
+    if p in ("openai", "anthropic"):
+        return bool((_env_fallback_key(p) or "").strip() or (api_key or "").strip())
+    return False
+
+
 def _gemini_backend() -> str:
     return (os.getenv("JOBHUNTER_GEMINI_BACKEND") or "studio").strip().lower()
 
@@ -114,6 +130,53 @@ def _vertex_model_name() -> str:
         return shared
     # 1.5-* is absent from many newer Model Garden catalogs; 2.5 Flash is listed and works with LangChain.
     return "gemini-2.5-flash"
+
+
+def _vertex_max_retries() -> int:
+    """Attempts per LangChain ChatVertexAI / tenacity (includes the first try)."""
+    raw = (os.getenv("JOBHUNTER_VERTEX_MAX_RETRIES") or "").strip()
+    if not raw:
+        return 12
+    try:
+        n = int(raw)
+    except ValueError:
+        return 12
+    return max(1, min(n, 50))
+
+
+def _vertex_wait_exponential_kwargs() -> dict[str, float]:
+    """Backoff between retries; wider max than LangChain default (10s) helps 429 / quota recovery."""
+    defaults = {"min": 5.0, "max": 120.0}
+    out: dict[str, float] = {}
+    min_raw = (os.getenv("JOBHUNTER_VERTEX_RETRY_BACKOFF_MIN") or "").strip()
+    max_raw = (os.getenv("JOBHUNTER_VERTEX_RETRY_BACKOFF_MAX") or "").strip()
+    if min_raw:
+        try:
+            out["min"] = max(0.5, float(min_raw))
+        except ValueError:
+            out["min"] = defaults["min"]
+    else:
+        out["min"] = defaults["min"]
+    if max_raw:
+        try:
+            out["max"] = max(out["min"], float(max_raw))
+        except ValueError:
+            out["max"] = defaults["max"]
+    else:
+        out["max"] = max(out["min"], defaults["max"])
+    return out
+
+
+def _vertex_request_parallelism() -> int | None:
+    """Optional cap on Vertex client parallelism (lower may reduce burst 429). Unset = library default."""
+    raw = (os.getenv("JOBHUNTER_VERTEX_REQUEST_PARALLELISM") or "").strip()
+    if not raw:
+        return None
+    try:
+        n = int(raw)
+    except ValueError:
+        return None
+    return max(1, min(n, 32))
 
 
 def build_gemini_vertex() -> BaseChatModel:
@@ -134,20 +197,35 @@ def build_gemini_vertex() -> BaseChatModel:
     transport = (os.getenv("JOBHUNTER_VERTEX_API_TRANSPORT") or "grpc").strip().lower()
     if transport not in ("grpc", "rest"):
         transport = "grpc"
+    max_retries = _vertex_max_retries()
+    wait_exp = _vertex_wait_exponential_kwargs()
+    req_par = _vertex_request_parallelism()
+    log_extra = ""
+    if req_par is not None:
+        log_extra = f", request_parallelism={req_par}"
     logger.info(
-        "Gemini: Vertex AI (project=%s, location=%s, model=%s, transport=%s)",
+        "Gemini: Vertex AI (project=%s, location=%s, model=%s, transport=%s, "
+        "max_retries=%s, retry_backoff_sec=[%s,%s]%s)",
         project,
         location,
         model,
         transport,
+        max_retries,
+        wait_exp["min"],
+        wait_exp["max"],
+        log_extra,
     )
-    return ChatVertexAI(
-        model=model,
-        project=project,
-        location=location,
-        max_retries=6,
-        api_transport=transport,
-    )
+    kwargs: dict = {
+        "model": model,
+        "project": project,
+        "location": location,
+        "max_retries": max_retries,
+        "wait_exponential_kwargs": wait_exp,
+        "api_transport": transport,
+    }
+    if req_par is not None:
+        kwargs["request_parallelism"] = req_par
+    return ChatVertexAI(**kwargs)
 
 
 async def maybe_preflight_vertex_llm(llm: BaseChatModel) -> None:

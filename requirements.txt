@@ -1,17 +1,31 @@
+# Core
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 jinja2==3.1.4
 python-multipart==0.0.9
-aiosqlite==0.20.0
 pydantic==2.10.6
+aiofiles==24.1.0
 python-dotenv==1.0.1
+
+# Tier 1 — LinkedIn / Indeed (Playwright + BeautifulSoup)
+playwright==1.49.1
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# Database
+aiosqlite==0.20.0
+
+# Excel
+openpyxl==3.1.5
+
+# Scheduler
+apscheduler==3.10.4
+
+# Live updates
 sse-starlette==2.1.0
+
+# Tier 2 — YC, career pages, custom (browser-use + LangChain)
 browser-use==0.1.40
-# Phase 3 Step 1: Gemini explicitly; core band matches browser-use. OpenAI/Anthropic/Ollama
-# packages are installed as dependencies of browser-use (same spec step).
 langchain-core>=0.3.30,<0.4
 langchain-google-genai>=2.0,<3
 langchain-google-vertexai>=2.0,<3
-openpyxl==3.1.5
-apscheduler==3.10.4
-aiofiles==24.1.0

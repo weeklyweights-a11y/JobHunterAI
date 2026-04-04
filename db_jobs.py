@@ -1,4 +1,4 @@
-"""Job rows: insert, query, deduplication."""
+"""Job rows: insert, query, deduplication (rolling window)."""
 
 from __future__ import annotations
 
@@ -15,16 +15,64 @@ def _today_start_iso() -> str:
 
 
 def _job_row(row: aiosqlite.Row) -> dict[str, Any]:
+    keys = row.keys()
+    apply_t = "unknown"
+    if "apply_type" in keys and row["apply_type"] is not None:
+        apply_t = str(row["apply_type"])
+    loc = ""
+    jid = ""
+    posted = ""
+    fresh = ""
+    applicants = ""
+    if "location" in keys and row["location"] is not None:
+        loc = str(row["location"])
+    if "job_id" in keys and row["job_id"] is not None:
+        jid = str(row["job_id"])
+    if "posted_time" in keys and row["posted_time"] is not None:
+        posted = str(row["posted_time"])
+    if "freshness" in keys and row["freshness"] is not None:
+        fresh = str(row["freshness"])
+    if "applicant_count" in keys and row["applicant_count"] is not None:
+        applicants = str(row["applicant_count"])
+    desc = ""
+    sen = ""
+    if "job_description" in keys and row["job_description"] is not None:
+        desc = str(row["job_description"])
+    if "seniority" in keys and row["seniority"] is not None:
+        sen = str(row["seniority"])
     return {
         "id": row["id"],
         "title": row["title"],
         "company": row["company"],
         "url": row["url"],
         "source": row["source"],
+        "apply_type": apply_t,
         "found_at": row["found_at"],
         "search_role": row["search_role"],
         "search_location": row["search_location"],
+        "location": loc,
+        "job_id": jid,
+        "posted_time": posted,
+        "freshness": fresh,
+        "applicant_count": applicants,
+        "job_description": desc,
+        "seniority": sen,
     }
+
+
+async def _url_in_dedup_window(
+    db: aiosqlite.Connection, url: str, dedup_days: int
+) -> bool:
+    cur = await db.execute(
+        """
+        SELECT 1 FROM jobs
+        WHERE url = ? AND found_at > datetime('now', '-' || ? || ' days')
+        LIMIT 1
+        """,
+        (url, str(max(1, dedup_days))),
+    )
+    row = await cur.fetchone()
+    return row is not None
 
 
 async def add_job(
@@ -32,60 +80,128 @@ async def add_job(
     url: str,
     company: str | None = None,
     source: str | None = None,
+    *,
+    apply_type: str = "unknown",
     search_role: str | None = None,
     search_location: str | None = None,
+    location: str | None = None,
+    job_id: str | None = None,
+    posted_time: str | None = None,
+    freshness: str | None = None,
+    applicant_count: str | None = None,
+    job_description: str | None = None,
+    seniority: str | None = None,
+    dedup_days: int = 7,
 ) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            """INSERT OR IGNORE INTO jobs
-            (title, company, url, source, search_role, search_location)
-            VALUES (?, ?, ?, ?, ?, ?)""",
-            (title, company, url, source, search_role, search_location),
+        if await _url_in_dedup_window(db, url, dedup_days):
+            return False
+        await db.execute(
+            """INSERT INTO jobs
+            (title, company, url, source, apply_type, search_role, search_location, location, job_id,
+             posted_time, freshness, applicant_count, job_description, seniority)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                title,
+                company,
+                url,
+                source or "",
+                apply_type or "unknown",
+                search_role,
+                search_location,
+                location,
+                job_id,
+                posted_time,
+                freshness,
+                applicant_count,
+                job_description,
+                seniority,
+            ),
         )
         await db.commit()
-        return cur.rowcount > 0
+        return True
 
 
 async def add_jobs_bulk(
     jobs: list[dict[str, Any]],
     *,
     found_at_iso: str | None = None,
+    dedup_days: int = 7,
 ) -> tuple[int, list[dict[str, Any]]]:
-    """Insert jobs with URL dedup; return (count inserted, rows that were new)."""
+    """Insert jobs with rolling-window URL dedup; return (count inserted, new rows)."""
     run_ts = found_at_iso or datetime.now().isoformat(timespec="seconds")
+    days = max(1, dedup_days)
     added = 0
     new_rows: list[dict[str, Any]] = []
     async with aiosqlite.connect(DB_PATH) as db:
         for j in jobs:
-            cur = await db.execute(
-                """INSERT OR IGNORE INTO jobs
-                (title, company, url, source, search_role, search_location, found_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            url = str(j["url"]).strip()
+            if not url:
+                continue
+            if await _url_in_dedup_window(db, url, days):
+                continue
+            apply_type = str(j.get("apply_type") or "unknown")
+            posted_time = str(j.get("posted_time") or "").strip() or None
+            freshness = str(j.get("freshness") or "").strip() or None
+            applicant_count = str(j.get("applicant_count") or "").strip() or None
+            job_description = str(j.get("job_description") or "").strip() or None
+            seniority = str(j.get("seniority") or "").strip() or None
+            await db.execute(
+                """INSERT INTO jobs
+                (title, company, url, source, apply_type, search_role, search_location, found_at, location, job_id,
+                 posted_time, freshness, applicant_count, job_description, seniority)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     j["title"],
                     j.get("company"),
-                    j["url"],
-                    j.get("source"),
+                    url,
+                    j.get("source") or "",
+                    apply_type,
                     j.get("search_role"),
                     j.get("search_location"),
                     run_ts,
+                    str(j.get("location") or "").strip() or None,
+                    str(j.get("job_id") or "").strip() or None,
+                    posted_time,
+                    freshness,
+                    applicant_count,
+                    job_description,
+                    seniority,
                 ),
             )
-            if cur.rowcount > 0:
-                added += cur.rowcount
-                new_rows.append(
-                    {
-                        "title": j["title"],
-                        "company": (j.get("company") or "") or "",
-                        "url": j["url"],
-                        "source": j.get("source") or "",
-                        "search_role": j.get("search_role"),
-                        "search_location": j.get("search_location"),
-                        "found_at": run_ts,
-                    }
-                )
+            added += 1
+            new_rows.append(
+                {
+                    "title": j["title"],
+                    "company": (j.get("company") or "") or "",
+                    "url": url,
+                    "source": j.get("source") or "",
+                    "apply_type": apply_type,
+                    "search_role": j.get("search_role"),
+                    "search_location": j.get("search_location"),
+                    "found_at": run_ts,
+                    "location": str(j.get("location") or ""),
+                    "job_id": str(j.get("job_id") or ""),
+                    "posted_time": str(j.get("posted_time") or ""),
+                    "freshness": str(j.get("freshness") or ""),
+                    "applicant_count": str(j.get("applicant_count") or ""),
+                    "job_description": str(j.get("job_description") or ""),
+                    "seniority": str(j.get("seniority") or ""),
+                }
+            )
         await db.commit()
     return added, new_rows
+
+
+async def cleanup_old_jobs(retention_days: int = 30) -> int:
+    """Delete jobs older than retention_days. Returns rows deleted."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """DELETE FROM jobs WHERE found_at < datetime('now', '-' || ? || ' days')""",
+            (str(max(1, retention_days)),),
+        )
+        await db.commit()
+        return cur.rowcount
 
 
 async def get_all_jobs(
@@ -192,8 +308,38 @@ async def get_today_count() -> int:
     return await get_job_count(date_from=_today_start_iso())
 
 
-async def url_exists(url: str) -> bool:
+async def url_exists(url: str, *, dedup_days: int = 7) -> bool:
+    """True if url appears within the rolling dedup window."""
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("SELECT 1 FROM jobs WHERE url = ? LIMIT 1", (url,))
+        return await _url_in_dedup_window(db, url, max(1, dedup_days))
+
+
+async def linkedin_url_for_title_company(
+    title: str,
+    company: str,
+    *,
+    dedup_days: int = 7,
+    source: str = "linkedin",
+) -> str | None:
+    """Most recent stored URL for same title+company in the dedup window (repost detection)."""
+    t = (title or "").strip().lower()
+    c = (company or "").strip().lower()
+    if not t or not c:
+        return None
+    days = max(1, int(dedup_days))
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """
+            SELECT url FROM jobs
+            WHERE lower(title) = ? AND lower(company) = ? AND source = ?
+              AND found_at > datetime('now', '-' || ? || ' days')
+            ORDER BY found_at DESC
+            LIMIT 1
+            """,
+            (t, c, source, str(days)),
+        )
         row = await cur.fetchone()
-        return row is not None
+        if not row or row[0] is None:
+            return None
+        u = str(row[0]).strip()
+        return u or None

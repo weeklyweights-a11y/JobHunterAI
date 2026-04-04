@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, HttpUrl, TypeAdapter, field_validator
 
+from db_paths import LINKEDIN_EMPLOYMENT_TYPE_CODES, normalize_linkedin_employment_types
+
 ExperienceLevel = Literal["any", "entry", "mid", "senior", "lead"]
 LlmProvider = Literal["gemini", "openai", "anthropic", "ollama"]
 ScheduleHours = Literal[2, 4, 6, 8, 12, 24]
@@ -29,6 +31,81 @@ class ConfigIn(BaseModel):
     llm_api_key: str | None = None
     resume_path: str | None = None
     browser_cdp_url: str | None = None
+    auto_run_enabled: bool | None = None
+    linkedin_email: str | None = None
+    linkedin_password: str | None = None
+    linkedin_include_easy_apply: bool | None = None
+    linkedin_posted_past_week: bool | None = None
+    linkedin_include_reposts: bool | None = None
+    linkedin_employment_types: list[str] | None = None
+    filter_jobs_by_relevance_llm: bool | None = None
+    ats_platforms: dict[str, bool] | None = None
+    dedup_days: int | None = None
+    ats_posted_within_days: int | None = None
+    ats_google_max_serp_pages: int | None = None
+    ats_captcha_wait_seconds: int | None = None
+
+    @field_validator("linkedin_employment_types", mode="before")
+    @classmethod
+    def validate_linkedin_employment_types(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        if not isinstance(v, list):
+            return ["F"]
+        seen: set[str] = set()
+        out: list[str] = []
+        for x in v:
+            if not isinstance(x, str):
+                continue
+            u = x.strip().upper()
+            if u in LINKEDIN_EMPLOYMENT_TYPE_CODES and u not in seen:
+                seen.add(u)
+                out.append(u)
+        return out if out else ["F"]
+
+    @field_validator("dedup_days", mode="before")
+    @classmethod
+    def clamp_dedup_days(cls, v: int | None) -> int | None:
+        if v is None:
+            return None
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return None
+        return max(1, min(n, 365))
+
+    @field_validator("ats_posted_within_days", mode="before")
+    @classmethod
+    def clamp_ats_posted_within_days(cls, v: int | None) -> int | None:
+        if v is None:
+            return None
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return None
+        return max(0, min(n, 365))
+
+    @field_validator("ats_google_max_serp_pages", mode="before")
+    @classmethod
+    def clamp_ats_google_max_serp_pages(cls, v: int | None) -> int | None:
+        if v is None:
+            return None
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return None
+        return max(1, min(n, 50))
+
+    @field_validator("ats_captcha_wait_seconds", mode="before")
+    @classmethod
+    def clamp_ats_captcha_wait_seconds(cls, v: int | None) -> int | None:
+        if v is None:
+            return None
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return None
+        return max(30, min(n, 900))
 
     @field_validator("roles", "locations", mode="before")
     @classmethod
@@ -69,6 +146,24 @@ class ConfigOut(BaseModel):
     llm_api_key: str
     resume_path: str
     browser_cdp_url: str = ""
+    auto_run_enabled: bool = True
+    linkedin_email: str = ""
+    linkedin_password: str = ""
+    linkedin_include_easy_apply: bool = False
+    linkedin_posted_past_week: bool = False
+    linkedin_include_reposts: bool = False
+    linkedin_employment_types: list[str] = ["F"]
+    filter_jobs_by_relevance_llm: bool = True
+    ats_platforms: dict[str, bool] = {}
+    dedup_days: int = 7
+    ats_posted_within_days: int = 7
+    ats_google_max_serp_pages: int = 20
+    ats_captcha_wait_seconds: int = 180
+
+    @field_validator("linkedin_employment_types", mode="before")
+    @classmethod
+    def out_jt(cls, v: object) -> list[str]:
+        return normalize_linkedin_employment_types(v)
 
 
 class LlmKeyValidateIn(BaseModel):
@@ -123,3 +218,4 @@ class SchedulerStatusResponse(BaseModel):
     active: bool
     next_run: str | None = None
     interval_hours: int
+    reason: str | None = None

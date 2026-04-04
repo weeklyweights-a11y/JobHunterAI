@@ -16,6 +16,7 @@ from agent_runtime import config_allows_schedule, try_start_hunt
 logger = logging.getLogger(__name__)
 
 HUNT_JOB_ID = "hunt_interval"
+CLEANUP_JOB_ID = "jobs_retention_cleanup"
 FIRST_DELAY_SEC = 30
 
 
@@ -24,6 +25,15 @@ def _bind_hunt_tick(app: Any):
         await scheduled_hunt_tick(app)
 
     return tick
+
+
+async def scheduled_retention_cleanup() -> None:
+    try:
+        n = await db.cleanup_old_jobs(30)
+        if n:
+            logger.info("cleanup_old_jobs removed %s row(s) older than 30 days", n)
+    except Exception:
+        logger.exception("cleanup_old_jobs failed")
 
 
 async def scheduled_hunt_tick(app: Any) -> None:
@@ -73,9 +83,17 @@ async def sync_scheduler(
         return
 
     cfg = await db.get_config()
+    auto_run_enabled = bool(cfg.get("auto_run_enabled", True))
+    if not auto_run_enabled:
+        _remove_job(scheduler)
+        logger.info("Auto-run disabled by user setting.")
+        return
     if not config_allows_schedule(cfg):
         _remove_job(scheduler)
-        logger.info("Auto-run disabled until config is complete (roles, locations, LLM, sources).")
+        logger.info(
+            "Auto-run disabled until config is complete (roles, locations, sources; "
+            "LLM required only for Tier 2 sources)."
+        )
         return
 
     hours = int(cfg["schedule_hours"])
@@ -123,10 +141,11 @@ async def build_scheduler_status(app: Any) -> dict[str, Any]:
     """Payload for GET /api/scheduler (inner `data` object)."""
     cfg = await db.get_config()
     interval_hours = int(cfg["schedule_hours"])
+    auto_run_enabled = bool(cfg.get("auto_run_enabled", True))
     valid = config_allows_schedule(cfg)
     scheduler: AsyncIOScheduler | None = getattr(app.state, "scheduler", None)
     job = scheduler.get_job(HUNT_JOB_ID) if scheduler else None
-    active = bool(valid and job is not None)
+    active = bool(auto_run_enabled and valid and job is not None)
     next_run: str | None = None
     if job is not None:
         next_run = _next_run_iso_utc(job)
@@ -134,6 +153,11 @@ async def build_scheduler_status(app: Any) -> dict[str, Any]:
         "active": active,
         "next_run": next_run,
         "interval_hours": interval_hours,
+        "reason": (
+            "disabled_by_user"
+            if not auto_run_enabled
+            else ("incomplete_config" if not valid else None)
+        ),
     }
 
 
@@ -142,6 +166,12 @@ def create_scheduler(app: Any) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     app.state.scheduler = scheduler
     scheduler.start()
+    scheduler.add_job(
+        scheduled_retention_cleanup,
+        IntervalTrigger(hours=24),
+        id=CLEANUP_JOB_ID,
+        replace_existing=True,
+    )
     return scheduler
 
 

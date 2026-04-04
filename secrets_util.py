@@ -17,4 +17,5 @@ def apply_mask_to_config_dict(data: dict[str, Any]) -> dict[str, Any]:
     out = dict(data)
     out["email_app_password"] = mask_secret(str(data.get("email_app_password") or ""))
     out["llm_api_key"] = mask_secret(str(data.get("llm_api_key") or ""))
+    out["linkedin_password"] = mask_secret(str(data.get("linkedin_password") or ""))
     return out

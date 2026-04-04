@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
-import os
 import sys
 
+if sys.platform == "win32":
+    import asyncio
 
-def _configure_runtime() -> None:
-    """Windows: Proactor event loop for Playwright subprocesses; UTF-8 stdio for console logs."""
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+import asyncio
+import os
+
+
+def _configure_stdio_utf8() -> None:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             try:
@@ -19,7 +22,7 @@ def _configure_runtime() -> None:
                 pass
 
 
-_configure_runtime()
+_configure_stdio_utf8()
 
 import uvicorn
 from dotenv import load_dotenv
@@ -40,10 +43,10 @@ def main() -> None:
         or os.getenv("CHROME_CDP_URL", "").strip()
     ):
         print(
-            "Browser tip: Without JOBHUNTER_CDP_URL, hunts open a separate Chromium window. "
-            "For the same Chrome (new tabs only): start Chrome with "
-            "--remote-debugging-port=9222, use that window for the dashboard, set "
-            "Chrome CDP URL to http://127.0.0.1:9222 in settings, Save."
+            "Browser tip: Without Chrome CDP in .env or dashboard settings, hunts use Playwright "
+            "Chromium. For your logged-in Chrome instead: start Chrome with "
+            "--remote-debugging-port=9222, set Chrome CDP URL to http://127.0.0.1:9222, Save. "
+            "Optional: JOBHUNTER_LAUNCH_CHROME=1 auto-starts Google Chrome with that port."
         )
     if (os.getenv("JOBHUNTER_GEMINI_BACKEND") or "").strip().lower() in (
         "vertex",

@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage
 logger = logging.getLogger(__name__)
 
 
-def _coerce_job(obj: Any) -> dict[str, str] | None:
+def _coerce_job(obj: Any) -> dict[str, Any] | None:
     if not isinstance(obj, dict):
         return None
     title = str(obj.get("title", "")).strip()
@@ -21,11 +21,21 @@ def _coerce_job(obj: Any) -> dict[str, str] | None:
     if not title or not url:
         return None
     company = str(obj.get("company", "") or "").strip()
-    return {"title": title, "company": company, "url": url}
+    out: dict[str, Any] = {"title": title, "company": company, "url": url}
+    ea = obj.get("easy_apply")
+    if isinstance(ea, bool):
+        out["easy_apply"] = ea
+    elif isinstance(ea, str) and ea.strip():
+        sl = ea.strip().lower()
+        if sl in ("true", "1", "yes"):
+            out["easy_apply"] = True
+        elif sl in ("false", "0", "no"):
+            out["easy_apply"] = False
+    return out
 
 
-def parse_jobs_json_from_text(text: str) -> list[dict[str, str]]:
-    """Extract a JSON array of {title, company, url} from model output."""
+def parse_jobs_json_from_text(text: str) -> list[dict[str, Any]]:
+    """Extract a JSON array of job dicts (title, company, url; optional easy_apply)."""
     if not text or not text.strip():
         return []
 
@@ -40,7 +50,7 @@ def parse_jobs_json_from_text(text: str) -> list[dict[str, str]]:
             data = data["jobs"]
         if not isinstance(data, list):
             return []
-        out: list[dict[str, str]] = []
+        out: list[dict[str, Any]] = []
         for item in data:
             row = _coerce_job(item)
             if row:
@@ -67,11 +77,12 @@ def parse_jobs_json_from_text(text: str) -> list[dict[str, str]]:
     return []
 
 
-async def format_jobs_with_llm(llm: BaseChatModel, raw_text: str) -> list[dict[str, str]]:
+async def format_jobs_with_llm(llm: BaseChatModel, raw_text: str) -> list[dict[str, Any]]:
     """Ask the LLM to convert free-form text into a JSON job array."""
     prompt = (
         "Convert the following text into a JSON array only (no markdown), "
-        'each element: {"title": string, "company": string, "url": string}. '
+        'each element: {"title": string, "company": string, "url": string, '
+        '"easy_apply": boolean (true if LinkedIn Easy Apply job)}. '
         "Use empty string for unknown company. If no jobs, return [].\n\n"
         f"{raw_text[:12000]}"
     )

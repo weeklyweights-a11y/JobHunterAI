@@ -518,6 +518,30 @@
     display: none;
 }
 
+.jobs-desc-preview {
+    max-width: 16rem;
+    font-size: 0.8rem;
+    vertical-align: top;
+    white-space: normal;
+    word-break: break-word;
+}
+
+.freshness-cell {
+    font-weight: 500;
+}
+
+.freshness-cell--fresh {
+    color: #3ecf8e;
+}
+
+.freshness-cell--recent {
+    color: #e6c84a;
+}
+
+.freshness-cell--reposted {
+    color: #e8a04a;
+}
+
 .empty-state {
     padding: 2rem 1rem;
     text-align: center;

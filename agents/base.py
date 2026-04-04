@@ -24,10 +24,13 @@ parse_jobs_from_agent_output = parse_jobs_json_from_text
 logger = logging.getLogger(__name__)
 
 TASK_TIMEOUT_SEC = 300.0
-# LinkedIn may need manual sign-in in the browser window before scraping.
-TASK_TIMEOUT_SEC_LINKEDIN = 900.0
+# LinkedIn: sign-in, scroll, click each job for detail, paginate — very long runs.
+TASK_TIMEOUT_SEC_LINKEDIN = 2400.0
+# YC: scroll + stricter role matching needs more steps than default.
+TASK_TIMEOUT_SEC_YC = 900.0
 MAX_STEPS = 60
-MAX_STEPS_LINKEDIN = 80
+MAX_STEPS_LINKEDIN = 320
+MAX_STEPS_YC = 90
 
 EmitFn: TypeAlias = Callable[[str], Awaitable[None]]
 

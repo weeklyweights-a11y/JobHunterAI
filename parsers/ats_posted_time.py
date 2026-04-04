@@ -1,0 +1,525 @@
+"""Extract job posted/publish dates from public ATS job HTML (JSON-LD, meta, embedded JSON)."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+from datetime import datetime, timedelta, timezone
+from html import unescape
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+
+from bs4 import BeautifulSoup
+from playwright.async_api import BrowserContext
+from playwright.async_api import Page
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+from parsers.google_parser import _platform_from_url
+from parsers.job_description import extract_job_description_from_html
+
+logger = logging.getLogger(__name__)
+
+
+def parse_posted_time_to_utc_datetime(raw: str) -> datetime | None:
+    """Parse ATS posted_time strings (ISO with Z, offset, or date-only) to UTC-aware datetime."""
+    s = (raw or "").strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    if "T" in s or re.match(r"^\d{4}-\d{2}-\d{2}[+-]", s):
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})", s)
+    if not m:
+        return None
+    try:
+        d = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+        return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def filter_ats_jobs_by_posted_within_days(
+    jobs: list[dict[str, Any]],
+    *,
+    max_days: int,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """
+    When max_days > 0: keep only jobs whose posted_time parses and is within the window.
+    Drops stale listings and rows with missing/unparseable posted_time (so unknown dates
+    cannot bypass the freshness rule).
+    Returns (filtered_list, dropped_too_old, dropped_unparseable).
+    """
+    if max_days <= 0 or not jobs:
+        return jobs, 0, 0
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=max_days)
+    kept: list[dict[str, Any]] = []
+    dropped_old = 0
+    dropped_bad = 0
+    for j in jobs:
+        dt = parse_posted_time_to_utc_datetime(str(j.get("posted_time") or ""))
+        if dt is None:
+            dropped_bad += 1
+            continue
+        if dt < cutoff:
+            dropped_old += 1
+            continue
+        kept.append(j)
+    return kept, dropped_old, dropped_bad
+
+
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+_FETCH_MAX_BYTES = 2_500_000
+_FETCH_TIMEOUT_SEC = 28
+
+# Prefer specific keys over generic updated/created when scanning embedded JSON.
+_JSON_DATE_KEY_PRIORITY: tuple[str, ...] = (
+    "dateposted",
+    "datePosted",
+    "publisheddate",
+    "published_at",
+    "publishedat",
+    "firstpublishedat",
+    "first_published_at",
+    "postedat",
+    "posted_at",
+    "publicationstartdate",
+    "jobposteddate",
+)
+
+_JSON_DATE_KEY_FALLBACK: frozenset[str] = frozenset(
+    {
+        "updated_at",
+        "updatedat",
+        "created_at",
+        "createdat",
+    }
+)
+
+# Ashby public job pages: window.__appData → posting.updatedAt (best) or publishedDate
+_ASHBY_POSTING_PREFIX_RE = re.compile(r'"posting"\s*:\s*\{', re.I)
+_ASHBY_UPDATED_AT_RE = re.compile(r'"updatedAt"\s*:\s*"([^"]+)"', re.I)
+_ASHBY_PUBLISHED_DATE_RE = re.compile(r'"publishedDate"\s*:\s*"([^"]+)"', re.I)
+
+_GREENHOUSE_PUBLISHED_RE = re.compile(
+    r'"published_at"\s*:\s*"([^"]+)"',
+    re.IGNORECASE,
+)
+_GENERIC_DATEPOSTED_RE = re.compile(
+    r'"datePosted"\s*:\s*"([^"]+)"',
+    re.IGNORECASE,
+)
+_NEXT_DATA_RE = re.compile(
+    r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>([\s\S]*?)</script>',
+    re.IGNORECASE,
+)
+
+
+def _normalize_date_value(raw: str) -> str:
+    s = unescape((raw or "").strip())
+    if not s:
+        return ""
+    # Strip timezone names sometimes appended
+    return s[:80] if len(s) > 80 else s
+
+
+def accept_normalized_posted_string(raw: str) -> str | None:
+    """
+    Return normalized string only if it parses to a real instant/date.
+    Rejects bogus fragments (wrong JSON matches, partial offsets, etc.).
+    """
+    s = _normalize_date_value(raw)
+    if not s:
+        return None
+    if parse_posted_time_to_utc_datetime(s) is None:
+        return None
+    return s
+
+
+def _looks_isoish(s: str) -> bool:
+    """Require calendar prefix YYYY-MM-DD so random ISO-like fragments are not accepted."""
+    s = s.strip()
+    if len(s) < 10:
+        return False
+    if s.startswith("http"):
+        return False
+    return bool(re.match(r"^\d{4}-\d{2}-\d{2}", s))
+
+
+def _walk_jsonld_job_posting(obj: Any, found: list[str]) -> None:
+    if isinstance(obj, dict):
+        types = obj.get("@type")
+        tlist: list[str] = []
+        if isinstance(types, str):
+            tlist = [types]
+        elif isinstance(types, list):
+            tlist = [str(x) for x in types]
+        is_job = any("JobPosting" in str(t) for t in tlist)
+        if is_job:
+            for key in ("datePosted", "dateposted"):
+                if key in obj and obj[key]:
+                    v = _normalize_date_value(str(obj[key]))
+                    if v:
+                        found.append(v)
+                        return
+        for v in obj.values():
+            _walk_jsonld_job_posting(v, found)
+    elif isinstance(obj, list):
+        for x in obj:
+            _walk_jsonld_job_posting(x, found)
+
+
+def _json_ld_date_posted(html: str) -> str | None:
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
+        soup = BeautifulSoup(html, "html.parser")
+    found: list[str] = []
+    for tag in soup.find_all("script", type=lambda x: x and "ld+json" in x.lower()):
+        raw = tag.string or tag.get_text() or ""
+        if not raw.strip():
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            _walk_jsonld_job_posting(data, found)
+        elif isinstance(data, list):
+            for item in data:
+                _walk_jsonld_job_posting(item, found)
+        if found:
+            return found[0]
+    return None
+
+
+def _meta_date(html: str) -> str | None:
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
+        soup = BeautifulSoup(html, "html.parser")
+    for prop in (
+        "article:published_time",
+        "og:published_time",
+        "og:updated_time",
+    ):
+        el = soup.find("meta", property=prop) or soup.find("meta", attrs={"property": prop})
+        if el and el.get("content"):
+            v = _normalize_date_value(str(el["content"]))
+            if v and _looks_isoish(v):
+                return v
+    el = soup.find("meta", attrs={"name": re.compile(r"^date$", re.I)})
+    if el and el.get("content"):
+        v = _normalize_date_value(str(el["content"]))
+        if v and _looks_isoish(v):
+            return v
+    return None
+
+
+def _greenhouse_remix_date(html: str) -> str | None:
+    m = _GREENHOUSE_PUBLISHED_RE.search(html)
+    if m:
+        v = _normalize_date_value(m.group(1))
+        if v:
+            return v
+    return None
+
+
+def _generic_date_posted_in_html(html: str) -> str | None:
+    m = _GENERIC_DATEPOSTED_RE.search(html)
+    if m:
+        v = _normalize_date_value(m.group(1))
+        if v and _looks_isoish(v):
+            return v
+    return None
+
+
+def _collect_json_date_fields(obj: Any, acc: dict[str, str]) -> None:
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            kl = str(k).lower()
+            if isinstance(v, str) and v.strip() and _looks_isoish(v):
+                if kl in _JSON_DATE_KEY_PRIORITY or kl in _JSON_DATE_KEY_FALLBACK:
+                    acc.setdefault(kl, v.strip())
+            else:
+                _collect_json_date_fields(v, acc)
+    elif isinstance(obj, list):
+        for x in obj:
+            _collect_json_date_fields(x, acc)
+
+
+def _next_data_date(html: str) -> str | None:
+    m = _NEXT_DATA_RE.search(html)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return None
+    acc: dict[str, str] = {}
+    _collect_json_date_fields(data, acc)
+    for key in _JSON_DATE_KEY_PRIORITY:
+        if key in acc:
+            return _normalize_date_value(acc[key])
+    for key in _JSON_DATE_KEY_FALLBACK:
+        if key in acc:
+            return _normalize_date_value(acc[key])
+    return None
+
+
+def _ashby_app_data_posted_time(html: str) -> str | None:
+    """
+    Ashby embeds job state in window.__appData: posting.updatedAt (ISO) and publishedDate (date).
+    Prefer updatedAt when present — matches visible JSON-LD date but adds time for freshness.
+    """
+    m = _ASHBY_POSTING_PREFIX_RE.search(html)
+    if m:
+        window = html[m.start() : m.start() + 280_000]
+        um = _ASHBY_UPDATED_AT_RE.search(window)
+        if um:
+            v = _normalize_date_value(um.group(1))
+            if v and _looks_isoish(v):
+                return v
+    pm = _ASHBY_PUBLISHED_DATE_RE.search(html)
+    if pm:
+        v = _normalize_date_value(pm.group(1))
+        if v and _looks_isoish(v):
+            return v
+    return None
+
+
+def _lever_embedded_date(html: str) -> str | None:
+    # Lever sometimes exposes listCreatedAt / createdAt in a JSON blob
+    for pat in (
+        r'"listCreatedAt"\s*:\s*"([^"]+)"',
+        r'"createdAt"\s*:\s*"([^"]+)"',
+        r'"postedAt"\s*:\s*"([^"]+)"',
+    ):
+        m = re.search(pat, html, re.I)
+        if m:
+            v = _normalize_date_value(m.group(1))
+            if v and _looks_isoish(v):
+                return v
+    return None
+
+
+def extract_posted_time_from_html(html: str, url: str) -> str | None:
+    """
+    Best-effort posted date from raw job page HTML.
+    Ashby: __appData posting.updatedAt / publishedDate, then JSON-LD.
+    Others: JSON-LD JobPosting → Greenhouse published_at → __NEXT_DATA__ →
+    Lever-style fields → generic "datePosted" in page → meta tags.
+    """
+    if not html or not html.strip():
+        return None
+    host = (urlparse(url).netloc or "").lower()
+
+    extractors: list[Any] = []
+    if "ashbyhq.com" in host:
+        extractors.append(_ashby_app_data_posted_time)
+    extractors.append(_json_ld_date_posted)
+    if "greenhouse.io" in host:
+        extractors.append(_greenhouse_remix_date)
+    extractors.append(_next_data_date)
+    if "lever.co" in host:
+        extractors.append(_lever_embedded_date)
+    extractors.extend((_generic_date_posted_in_html, _meta_date))
+
+    for fn in extractors:
+        try:
+            got = fn(html)
+        except Exception:
+            logger.debug("ats_posted_time extractor error url=%s", url, exc_info=True)
+            got = None
+        if got:
+            ok = accept_normalized_posted_string(got)
+            if ok:
+                return ok
+
+    if "workable.com" in host:
+        m = re.search(r'"published_at"\s*:\s*"([^"]+)"', html, re.I)
+        if m:
+            ok = accept_normalized_posted_string(m.group(1))
+            if ok:
+                return ok
+
+    return None
+
+
+def _fetch_job_page_sync(url: str) -> str:
+    req = Request(
+        url,
+        headers={"User-Agent": _USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+        method="GET",
+    )
+    with urlopen(req, timeout=_FETCH_TIMEOUT_SEC) as resp:
+        raw = resp.read(_FETCH_MAX_BYTES)
+    return raw.decode("utf-8", errors="replace")
+
+
+async def _listing_html_via_playwright_page(page: Page, url: str) -> str:
+    await page.goto(url, wait_until="domcontentloaded", timeout=90_000)
+    try:
+        await page.wait_for_load_state("load", timeout=30_000)
+    except PlaywrightTimeoutError:
+        pass
+    try:
+        await page.wait_for_load_state("networkidle", timeout=40_000)
+    except PlaywrightTimeoutError:
+        pass
+    await asyncio.sleep(1.0)
+    return await page.content()
+
+
+async def enrich_ats_jobs_posted_times(
+    jobs: list[dict[str, Any]],
+    *,
+    emit: Any | None = None,
+    max_concurrent: int = 6,
+    playwright_context: BrowserContext | None = None,
+    reuse_page: Page | None = None,
+) -> list[dict[str, Any]]:
+    """
+    When posted_time is missing, load each ATS job listing and parse JSON-LD / embedded JSON.
+
+    With Playwright: **one tab** loads listings **one after another** via ``page.goto`` (either
+    ``reuse_page`` from the Google ATS flow, or a single temporary page). Avoids opening hundreds
+    of tabs, which breaks Chrome/CDP with "Failed to open a new tab".
+
+    If ``playwright_context`` is None, falls back to parallel HTTP GET (urllib).
+    Greenhouse board API rows usually already have posted_time and are skipped.
+    """
+    if not jobs:
+        return jobs
+
+    targets: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for j in jobs:
+        url = str(j.get("url") or "").strip()
+        if not url or not _platform_from_url(url):
+            continue
+        need_date = not str(j.get("posted_time") or "").strip()
+        need_desc = not str(j.get("job_description") or "").strip()
+        if not (need_date or need_desc):
+            continue
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        targets.append(j)
+
+    if not targets:
+        return jobs
+
+    n = len(targets)
+    use_browser = playwright_context is not None
+    if use_browser:
+        logger.info(
+            "ATS: loading %s job listing URL(s) in one browser tab (sequential goto)",
+            n,
+        )
+    if emit is not None:
+        if use_browser:
+            await emit(
+                f"ATS: Google phase done — loading {n} listing(s) **one at a time** in the same "
+                f"browser tab (goto each URL) to read posted dates…"
+            )
+        else:
+            await emit(
+                f"ATS: HTTP-fetching {n} listing URL(s) to read posted dates "
+                f"(no Playwright context — static HTML only)…"
+            )
+
+    sem = asyncio.Semaphore(max(1, min(max_concurrent, 16)))
+
+    async def _one_http(job: dict[str, Any]) -> int:
+        url = str(job.get("url") or "").strip()
+        async with sem:
+            try:
+                html = await asyncio.to_thread(_fetch_job_page_sync, url)
+            except (HTTPError, URLError, OSError) as e:
+                logger.debug("ATS posted_time fetch failed url=%s err=%s", url, e)
+                return 0
+            except Exception:
+                logger.debug("ATS posted_time fetch failed url=%s", url, exc_info=True)
+                return 0
+        dt = extract_posted_time_from_html(html, url)
+        got_date = 0
+        if dt and accept_normalized_posted_string(dt):
+            job["posted_time"] = dt
+            got_date = 1
+        if not str(job.get("job_description") or "").strip():
+            desc = extract_job_description_from_html(html, url)
+            if desc:
+                job["job_description"] = desc
+        return got_date
+
+    if use_browser:
+        assert playwright_context is not None
+        page = reuse_page
+        own_page = False
+        if page is None:
+            page = await playwright_context.new_page()
+            own_page = True
+        filled = 0
+        try:
+            for idx, job in enumerate(targets, start=1):
+                url = str(job.get("url") or "").strip()
+                try:
+                    html = await _listing_html_via_playwright_page(page, url)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.debug(
+                        "ATS posted_time Playwright failed url=%s err=%s",
+                        url[:120],
+                        e,
+                    )
+                    continue
+                if not (html or "").strip():
+                    continue
+                dt = extract_posted_time_from_html(html, url)
+                if dt and accept_normalized_posted_string(dt):
+                    job["posted_time"] = dt
+                    filled += 1
+                if not str(job.get("job_description") or "").strip():
+                    desc = extract_job_description_from_html(html, url)
+                    if desc:
+                        job["job_description"] = desc
+                if emit is not None and n >= 40 and idx % 40 == 0:
+                    await emit(
+                        f"ATS: posted-date progress {idx}/{n} listings "
+                        f"({filled} dates resolved so far)…"
+                    )
+        finally:
+            if own_page and page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+    else:
+        counts = await asyncio.gather(*(_one_http(j) for j in targets))
+        filled = sum(counts)
+
+    mode = "browser" if use_browser else "http"
+    logger.info("ATS posted_time (%s): filled %s / %s job pages", mode, filled, n)
+    if emit is not None:
+        await emit(
+            f"ATS: got a parseable posted date from {filled} of {n} listing page(s) "
+            f"({n - filled} still unknown if HTML had no date or load failed)."
+        )
+
+    return jobs

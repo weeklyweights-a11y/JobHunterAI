@@ -78,26 +78,30 @@ def validate_start_config(cfg: dict[str, Any]) -> str | None:
         return "Add at least one role in Setup Your Search."
     if not locs:
         return "Add at least one location in Setup Your Search."
-    provider = (cfg.get("llm_provider") or "gemini").strip().lower()
-    key = (_env_fallback_key(provider) or "").strip()
-    if not key:
-        key = (cfg.get("llm_api_key") or "").strip()
-    gemini_vertex = (
-        provider == "gemini"
-        and (os.getenv("JOBHUNTER_GEMINI_BACKEND") or "").strip().lower()
-        in ("vertex", "vertexai", "gcp")
-        and (
-            os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT") or ""
-        ).strip()
-    )
-    if provider != "ollama" and not key and not gemini_vertex:
-        return (
-            "Set an LLM API key in LLM provider, save settings, or set GOOGLE_API_KEY / "
-            "OPENAI_API_KEY / ANTHROPIC_API_KEY in .env. For billed GCP Gemini, set "
-            "JOBHUNTER_GEMINI_BACKEND=vertex and GOOGLE_CLOUD_PROJECT (no AI Studio key required)."
-        )
     sources = cfg.get("sources") or {}
-    board_on = any(sources.get(k, False) for k in ("linkedin", "indeed", "yc"))
+    tier2_needed = bool(sources.get("yc")) or bool(sources.get("career_page"))
+    if tier2_needed:
+        provider = (cfg.get("llm_provider") or "gemini").strip().lower()
+        key = (_env_fallback_key(provider) or "").strip()
+        if not key:
+            key = (cfg.get("llm_api_key") or "").strip()
+        gemini_vertex = (
+            provider == "gemini"
+            and (os.getenv("JOBHUNTER_GEMINI_BACKEND") or "").strip().lower()
+            in ("vertex", "vertexai", "gcp")
+            and (
+                os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT") or ""
+            ).strip()
+        )
+        if provider != "ollama" and not key and not gemini_vertex:
+            return (
+                "Tier 2 sources (YC, Career Pages) need an LLM: set API key in settings or "
+                "GOOGLE_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY in .env. For Vertex Gemini set "
+                "JOBHUNTER_GEMINI_BACKEND=vertex and GOOGLE_CLOUD_PROJECT."
+            )
+    board_on = any(
+        sources.get(k, False) for k in ("linkedin", "indeed", "ats", "yc")
+    )
     career_on = bool(sources.get("career_page"))
     career_urls = [
         u
@@ -106,13 +110,13 @@ def validate_start_config(cfg: dict[str, Any]) -> str | None:
     ]
     if not board_on and not career_on:
         return (
-            "Enable at least one job source (LinkedIn, Indeed, YC, or Career Pages). "
+            "Enable at least one job source (LinkedIn, Indeed, ATS, YC, or Career Pages). "
             "Start Hunting now saves your current checkboxes automatically."
         )
     if career_on and not career_urls and not board_on:
         return (
             "Career Pages is on but no URLs are saved. Add a career or custom URL, "
-            "or enable LinkedIn, Indeed, or YC."
+            "or enable LinkedIn, Indeed, ATS, or YC."
         )
     return None
 

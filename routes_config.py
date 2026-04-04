@@ -27,7 +27,7 @@ router = APIRouter(tags=["config"])
 def _merge_config_patch(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     merged = {**current}
     for key, val in patch.items():
-        if key in ("email_app_password", "llm_api_key") and val == "":
+        if key in ("email_app_password", "llm_api_key", "linkedin_password") and val == "":
             continue
         merged[key] = val
     return merged
@@ -43,14 +43,14 @@ async def get_config() -> dict[str, Any]:
 @router.post("/config")
 async def post_config(request: Request, body: ConfigIn) -> dict[str, Any]:
     current = await db.get_config()
-    old_ok = config_allows_schedule(current)
+    old_ok = bool(current.get("auto_run_enabled", True)) and config_allows_schedule(current)
     patch = body.model_dump(exclude_unset=True, mode="json")
     merged = _merge_config_patch(current, patch)
     schedule_hours_changed = int(merged["schedule_hours"]) != int(
         current["schedule_hours"]
     )
     saved = await db.save_config(merged)
-    new_ok = config_allows_schedule(saved)
+    new_ok = bool(saved.get("auto_run_enabled", True)) and config_allows_schedule(saved)
     await sync_scheduler(request.app, schedule_hours_changed=schedule_hours_changed)
     masked = apply_mask_to_config_dict(saved)
     out: dict[str, Any] = {

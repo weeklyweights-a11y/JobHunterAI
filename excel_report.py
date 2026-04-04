@@ -28,10 +28,21 @@ def _source_label(key: str) -> str:
     m = {
         "linkedin": "LinkedIn",
         "indeed": "Indeed",
+        "ats": "ATS",
+        "greenhouse": "Greenhouse",
         "yc": "YC",
         "career_page": "Career Pages",
     }
     return m.get(key, key or "Unknown")
+
+
+def _apply_type_label(t: str) -> str:
+    t = (t or "").strip().lower()
+    if t == "easy_apply":
+        return "Easy Apply"
+    if t == "external":
+        return "External"
+    return t or ""
 
 
 def _header_font() -> Font:
@@ -46,8 +57,11 @@ def _title_font() -> Font:
     return Font(name=_FONT_NAME, size=14, bold=True, color="000000")
 
 
-def _prepare_rows(jobs: list[dict[str, Any]]) -> list[tuple[str, str, str, str, str]]:
-    rows: list[tuple[str, str, str, str, str]] = []
+def _prepare_rows(
+    jobs: list[dict[str, Any]],
+) -> list[tuple[str, ...]]:
+    """Title, Company, Location, Seniority, Freshness, Posted Time, Applicant Count, Apply Type, Source, Job ID, Apply Link, Found At. (No job description — LLM-only.)"""
+    rows: list[tuple[str, ...]] = []
     for j in jobs:
         src = _source_label(str(j.get("source") or ""))
         found = str(j.get("found_at") or "")
@@ -55,9 +69,16 @@ def _prepare_rows(jobs: list[dict[str, Any]]) -> list[tuple[str, str, str, str, 
             (
                 str(j.get("title") or ""),
                 str(j.get("company") or ""),
+                str(j.get("location") or ""),
+                str(j.get("seniority") or ""),
+                str(j.get("freshness") or ""),
+                str(j.get("posted_time") or ""),
+                str(j.get("applicant_count") or ""),
+                _apply_type_label(str(j.get("apply_type") or "")),
                 src,
-                found,
+                str(j.get("job_id") or ""),
                 str(j.get("url") or ""),
+                found,
             )
         )
     return rows
@@ -90,8 +111,22 @@ def write_jobs_xlsx(
     ws = wb.active
     ws.title = "Jobs"
 
-    headers = ["Title", "Company", "Source", "Found At", "Apply Link"]
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=5)
+    headers = [
+        "Job Title",
+        "Company",
+        "Location",
+        "Seniority",
+        "Freshness",
+        "Posted Time",
+        "Applicant Count",
+        "Apply Type",
+        "Source",
+        "Job ID",
+        "Apply Link",
+        "Found At",
+    ]
+    ncols = len(headers)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
     c1 = ws.cell(row=1, column=1)
     c1.value = f"JobHunter AI — Jobs Found on {date_title}"
     c1.font = _title_font()
@@ -106,11 +141,12 @@ def write_jobs_xlsx(
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
     data_rows = _prepare_rows(jobs)
+    apply_col = 11
     for i, row_tuple in enumerate(data_rows):
         r = 4 + i
         fill = _ALT_ROW_FILLS[i % 2]
         for c_idx, val in enumerate(row_tuple, start=1):
-            if c_idx == 5:
+            if c_idx == apply_col:
                 cell = ws.cell(row=r, column=c_idx)
                 url = val
                 if url:
@@ -128,6 +164,9 @@ def write_jobs_xlsx(
             else:
                 cell = ws.cell(row=r, column=c_idx, value=val)
                 cell.font = _body_font()
+                # Force text so Excel does not parse ISO-8601 as broken date/time (e.g. ":51-04:00").
+                if c_idx in (6, 12):
+                    cell.number_format = "@"
             cell.fill = fill
             cell.alignment = Alignment(vertical="top", wrap_text=True)
 

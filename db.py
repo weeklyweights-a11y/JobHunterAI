@@ -5,6 +5,7 @@ from db_init import check_db_connection, init_db
 from db_jobs import (
     add_job,
     add_jobs_bulk,
+    cleanup_old_jobs,
     count_by_role,
     count_by_source,
     get_all_jobs,
@@ -24,6 +25,7 @@ __all__ = [
     "add_job",
     "add_jobs_bulk",
     "check_db_connection",
+    "cleanup_old_jobs",
     "count_by_role",
     "count_by_source",
     "create_run",
