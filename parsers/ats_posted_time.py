@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from bs4 import BeautifulSoup
@@ -22,6 +23,201 @@ from parsers.google_parser import _platform_from_url
 from parsers.job_description import extract_job_description_from_html
 
 logger = logging.getLogger(__name__)
+
+_LISTING_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.I,
+)
+
+
+def is_probably_ats_listing_page(url: str) -> bool:
+    """
+    True when the URL is likely a company board index (many jobs), not a single posting.
+    Used to skip naive date extraction and instead expand job links in the browser.
+    """
+    u = (url or "").strip()
+    if not u:
+        return False
+    p = urlparse(u)
+    pl = (p.path or "").rstrip("/").lower()
+    path = p.path or ""
+    host = (p.netloc or "").lower()
+    qs = parse_qs(p.query)
+
+    if qs.get("gh_jid"):
+        return False
+    if re.search(r"[?&]gh_jid=\d+", u, re.I):
+        return False
+
+    if _LISTING_UUID_RE.search(path):
+        return False
+    if re.search(r"/jobs/\d+(?:/|$)", pl, re.I):
+        return False
+
+    if "greenhouse.io" in host:
+        from parsers.greenhouse_http import is_greenhouse_board_listing_url
+
+        return is_greenhouse_board_listing_url(u)
+
+    if "lever.co" in host:
+        parts = [x for x in path.split("/") if x]
+        return len(parts) < 2
+
+    if "ashbyhq.com" in host:
+        from parsers.ashby_http import is_ashby_company_listing_url
+
+        parts = [x for x in path.split("/") if x]
+        if not parts:
+            return True
+        return is_ashby_company_listing_url(u)
+
+    for suf in ("/careers", "/jobs", "/open-positions", "/openings", "/job-openings"):
+        if pl.endswith(suf):
+            return True
+    return False
+
+
+def _normalize_title_match_string(s: str) -> str:
+    """Lowercase job title or phrase with runs of whitespace collapsed (substring matching)."""
+    return " ".join((s or "").lower().strip().split())
+
+
+def _expand_slash_in_role_branch(branch: str) -> list[str]:
+    """
+    Turn one role branch into one or more phrases (same rule as ``_ats_google_role_segment`` in
+    ``agents/ats``): ``AI/ML Engineer`` → ``ai engineer``, ``ml engineer``; otherwise ``/`` → space.
+    """
+    b = (branch or "").strip()
+    if not b:
+        return []
+    if "/" not in b:
+        p = _normalize_title_match_string(b)
+        return [p] if p else []
+    left, right = b.split("/", 1)
+    left, right = left.strip(), right.strip()
+    if left and right and " " not in left:
+        rparts = right.split(None, 1)
+        if len(rparts) == 2:
+            first_tok, suffix = rparts[0], rparts[1]
+            return [
+                p
+                for p in (
+                    _normalize_title_match_string(f"{left} {suffix}"),
+                    _normalize_title_match_string(f"{first_tok} {suffix}"),
+                )
+                if p
+            ]
+    merged = _normalize_title_match_string(b.replace("/", " "))
+    return [merged] if merged else []
+
+
+def role_match_phrases(role: str) -> list[str]:
+    """
+    Phrases for case-insensitive substring checks against a job title.
+    Outer ``|`` or ``,`` splits OR alternatives (each branch may expand ``/`` like AI/ML).
+    """
+    r = (role or "").strip()
+    if not r:
+        return []
+    chunks = re.split(r"\s*[|,]\s*", r)
+    seen: set[str] = set()
+    out: list[str] = []
+    for ch in chunks:
+        ch = ch.strip()
+        if not ch:
+            continue
+        for p in _expand_slash_in_role_branch(ch):
+            if p and p not in seen:
+                seen.add(p)
+                out.append(p)
+    return out
+
+
+def job_title_matches_search_role(title: str, role: str) -> bool:
+    """
+    True if the normalized title contains at least one **whole phrase** from the role
+    (e.g. ``data analyst`` matches ``Senior Data Analyst`` but not ``Data Entry Officer`` or
+    ``Privacy Operations Analyst``).
+    """
+    t = _normalize_title_match_string(title)
+    if not t:
+        return False
+    phrases = role_match_phrases(role)
+    if not phrases:
+        return False
+    return any(p in t for p in phrases)
+
+
+def title_matches_search_roles(title: str, search_roles: list[str] | None) -> bool:
+    """
+    True if the title matches any configured role via phrase substring rules
+    (see ``job_title_matches_search_role``). Empty ``search_roles`` matches all titles.
+    """
+    roles = search_roles or []
+    if not roles:
+        return True
+    if not (title or "").strip():
+        return False
+    return any(job_title_matches_search_role(title, r) for r in roles if (r or "").strip())
+
+
+def _role_keywords_for_link_filter(roles: list[str] | None) -> list[str]:
+    """Same phrases as title matching so listing-page link text must contain a full phrase."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for r in roles or []:
+        for p in role_match_phrases(r):
+            if len(p) >= 3 and p not in seen:
+                seen.add(p)
+                out.append(p)
+    if not out:
+        out = [
+            "software engineer",
+            "data scientist",
+            "data analyst",
+            "product manager",
+        ]
+    return out
+
+
+async def _discover_job_links_from_listing_page(
+    page: Page,
+    listing_url: str,
+    roles: list[str] | None,
+) -> list[tuple[str, str]]:
+    kws = _role_keywords_for_link_filter(roles)
+    try:
+        raw_links = await page.evaluate(
+            """() => [...document.querySelectorAll('a[href]')].map(a => ({
+                href: a.href || '',
+                text: (a.innerText || '').trim()
+            }))"""
+        )
+    except Exception:
+        logger.debug("listing link discovery evaluate failed url=%s", listing_url[:120], exc_info=True)
+        return []
+
+    base = listing_url.split("#")[0]
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for item in raw_links or []:
+        href = str(item.get("href") or "").strip()
+        text = str(item.get("text") or "")
+        if not href or href.startswith(("mailto:", "javascript:", "tel:")):
+            continue
+        low = f"{href.lower()} {text.lower()}"
+        if not any(kw in low for kw in kws):
+            continue
+        absu = urljoin(listing_url, href).split("#")[0]
+        if not absu or absu in seen:
+            continue
+        if absu.rstrip("/") == base.rstrip("/"):
+            continue
+        seen.add(absu)
+        out.append((absu, text))
+        if len(out) >= 80:
+            break
+    return out
 
 
 def parse_posted_time_to_utc_datetime(raw: str) -> datetime | None:
@@ -499,7 +695,10 @@ def _fetch_job_page_sync(url: str) -> str:
 
 
 async def _listing_html_via_playwright_page(page: Page, url: str) -> str:
+    from agents.browser_mgr import dismiss_cookie_popup
+
     await page.goto(url, wait_until="domcontentloaded", timeout=90_000)
+    await dismiss_cookie_popup(page)
     try:
         await page.wait_for_load_state("load", timeout=30_000)
     except PlaywrightTimeoutError:
@@ -519,26 +718,34 @@ async def enrich_ats_jobs_posted_times(
     max_concurrent: int = 6,
     playwright_context: BrowserContext | None = None,
     reuse_page: Page | None = None,
+    roles: list[str] | None = None,
+    search_roles: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    When posted_time is missing, load each ATS job listing and parse JSON-LD / embedded JSON.
+    HTTP enrichment order: Ashby (job pages then board ``jobPostings``) → Greenhouse job pages →
+    Lever job pages → Greenhouse board listings (public API) → Greenhouse ``gh_jid`` embeds;
+    then parallel HTTP or Playwright for whatever still needs dates or descriptions.
 
-    With Playwright: **one tab** loads listings **one after another** via ``page.goto`` (either
-    ``reuse_page`` from the Google ATS flow, or a single temporary page). Avoids opening hundreds
-    of tabs, which breaks Chrome/CDP with "Failed to open a new tab".
-
-    If ``playwright_context`` is None, falls back to parallel HTTP GET (urllib).
-    Greenhouse board API rows usually already have posted_time and are skipped.
-    Greenhouse listing pages: HTTP pass parses ``window.__remixContext`` (new Remix job boards).
+    ``search_roles`` (if provided) overrides ``roles`` for board listing filters and link discovery.
     """
     if not jobs:
         return jobs
 
-    from parsers.ashby_http import enrich_ashby_jobs_via_http
-    from parsers.greenhouse_http import enrich_greenhouse_jobs_via_http
+    sr = list(search_roles) if search_roles is not None else list(roles or [])
 
-    await enrich_ashby_jobs_via_http(jobs, emit=emit)
+    from parsers.ashby_http import enrich_ashby_jobs_via_http
+    from parsers.greenhouse_http import (
+        enrich_greenhouse_embedded_jobs_via_http,
+        enrich_greenhouse_jobs_via_http,
+        enrich_greenhouse_listing_pages_via_http,
+    )
+    from parsers.lever_http import enrich_lever_jobs_via_http
+
+    await enrich_ashby_jobs_via_http(jobs, emit=emit, search_roles=sr)
     await enrich_greenhouse_jobs_via_http(jobs, emit=emit)
+    await enrich_lever_jobs_via_http(jobs, emit=emit)
+    await enrich_greenhouse_listing_pages_via_http(jobs, search_roles=sr, emit=emit)
+    await enrich_greenhouse_embedded_jobs_via_http(jobs, emit=emit)
 
     targets: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
@@ -558,6 +765,18 @@ async def enrich_ats_jobs_posted_times(
     if not targets:
         return jobs
 
+    listing_batch = [
+        j
+        for j in targets
+        if is_probably_ats_listing_page(str(j.get("url") or ""))
+    ]
+    job_batch = [
+        j
+        for j in targets
+        if not is_probably_ats_listing_page(str(j.get("url") or ""))
+    ]
+    work_queue: list[dict[str, Any]] = list(job_batch)
+
     n = len(targets)
     use_browser = playwright_context is not None
     if use_browser:
@@ -566,15 +785,18 @@ async def enrich_ats_jobs_posted_times(
             n,
         )
     if emit is not None:
+        lb = len(listing_batch)
+        jb = len(job_batch)
+        extra = f" ({jb} job page(s), {lb} listing index page(s))." if lb else "."
         if use_browser:
             await emit(
-                f"ATS: Google phase done — loading {n} listing(s) **one at a time** in the same "
-                f"browser tab (goto each URL) to read posted dates…"
+                f"ATS: Google phase done — loading {n} URL(s){extra} "
+                f"**one at a time** in the same browser tab (goto each URL) to read posted dates…"
             )
         else:
             await emit(
-                f"ATS: HTTP-fetching {n} listing URL(s) to read posted dates "
-                f"(no Playwright context — static HTML only)…"
+                f"ATS: HTTP-fetching {jb} job URL(s) to read posted dates "
+                f"(skipping {lb} listing index page(s) without Playwright; static HTML only)…"
             )
 
     sem = asyncio.Semaphore(max(1, min(max_concurrent, 16)))
@@ -609,8 +831,66 @@ async def enrich_ats_jobs_posted_times(
             page = await playwright_context.new_page()
             own_page = True
         filled = 0
+        discovered: list[dict[str, Any]] = []
+        all_job_urls = {
+            str(x.get("url") or "").strip()
+            for x in jobs
+            if str(x.get("url") or "").strip()
+        }
         try:
-            for idx, job in enumerate(targets, start=1):
+            for idx, lt in enumerate(listing_batch, start=1):
+                if idx > 1:
+                    await asyncio.sleep(random.uniform(2.0, 4.0))
+                u = str(lt.get("url") or "").strip()
+                try:
+                    await _listing_html_via_playwright_page(page, u)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.debug(
+                        "ATS listing page Playwright failed url=%s err=%s",
+                        u[:120],
+                        e,
+                    )
+                    continue
+                try:
+                    pairs = await _discover_job_links_from_listing_page(
+                        page, u, sr
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.debug(
+                        "ATS listing link discovery failed url=%s",
+                        u[:120],
+                        exc_info=True,
+                    )
+                    pairs = []
+                for href, title in pairs:
+                    if href in all_job_urls:
+                        continue
+                    if not _platform_from_url(href):
+                        continue
+                    all_job_urls.add(href)
+                    new_j: dict[str, Any] = {
+                        "url": href,
+                        "title": (title or "").strip()
+                        or str(lt.get("title") or "Job posting"),
+                        "company": lt.get("company", ""),
+                        "source": lt.get("source", "ats"),
+                        "search_role": lt.get("search_role"),
+                        "search_location": lt.get("search_location"),
+                    }
+                    plat = _platform_from_url(href)
+                    if plat:
+                        new_j["platform"] = plat
+                    jobs.append(new_j)
+                    discovered.append(new_j)
+
+            work_queue = job_batch + discovered
+            for idx, job in enumerate(work_queue, start=1):
+                if idx > 1:
+                    await asyncio.sleep(random.uniform(2.0, 4.0))
                 url = str(job.get("url") or "").strip()
                 try:
                     html = await _listing_html_via_playwright_page(page, url)
@@ -633,9 +913,10 @@ async def enrich_ats_jobs_posted_times(
                     desc = extract_job_description_from_html(html, url)
                     if desc:
                         job["job_description"] = desc
-                if emit is not None and n >= 40 and idx % 40 == 0:
+                nwq = len(work_queue)
+                if emit is not None and nwq >= 40 and idx % 40 == 0:
                     await emit(
-                        f"ATS: posted-date progress {idx}/{n} listings "
+                        f"ATS: posted-date progress {idx}/{nwq} job page(s) "
                         f"({filled} dates resolved so far)…"
                     )
         finally:
@@ -645,15 +926,21 @@ async def enrich_ats_jobs_posted_times(
                 except Exception:
                     pass
     else:
-        counts = await asyncio.gather(*(_one_http(j) for j in targets))
+        counts = await asyncio.gather(*(_one_http(j) for j in job_batch))
         filled = sum(counts)
 
     mode = "browser" if use_browser else "http"
-    logger.info("ATS posted_time (%s): filled %s / %s job pages", mode, filled, n)
+    n_report = len(work_queue)
+    logger.info(
+        "ATS posted_time (%s): filled %s / %s job page target(s)",
+        mode,
+        filled,
+        n_report,
+    )
     if emit is not None:
         await emit(
-            f"ATS: got a parseable posted date from {filled} of {n} listing page(s) "
-            f"({n - filled} still unknown if HTML had no date or load failed)."
+            f"ATS: got a parseable posted date from {filled} of {n_report} job page target(s) "
+            f"({n_report - filled} still unknown if HTML had no date or load failed)."
         )
 
     return jobs

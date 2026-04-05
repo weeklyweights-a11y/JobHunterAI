@@ -17,6 +17,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import re
+import time
+
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
 logger = logging.getLogger(__name__)
@@ -180,6 +183,63 @@ async def resolve_cdp_url(app_cfg: dict[str, Any] | None) -> tuple[str, bool, bo
             logger.warning("Chrome launch did not expose CDP in time.")
 
     return base, True, False
+
+
+async def dismiss_cookie_popup(page: Page, *, budget_sec: float = 3.0) -> None:
+    """
+    Best-effort click on common cookie-consent controls. Returns immediately if nothing matches
+    within ``budget_sec`` (non-blocking for automation).
+    """
+    deadline = time.monotonic() + max(0.5, budget_sec)
+    selectors = (
+        "#onetrust-accept-btn-handler",
+        "button[id*='accept']",
+        "button[id*='cookie']",
+        "button[class*='cookie']",
+        "button[id*='consent']",
+        "[class*='cookie-banner'] button",
+        "[class*='CookieConsent'] button",
+        ".cc-btn",
+        "[data-testid*='cookie']",
+    )
+    for sel in selectors:
+        if time.monotonic() >= deadline:
+            return
+        try:
+            loc = page.locator(sel).first
+            if await loc.count() == 0:
+                continue
+            ms = max(300, int((deadline - time.monotonic()) * 1000))
+            if ms < 400:
+                return
+            await loc.click(timeout=min(2000, ms))
+            await asyncio.sleep(1.2)
+            return
+        except Exception:
+            continue
+    for label in (
+        "Accept All",
+        "Accept Cookies",
+        "Accept",
+        "I Agree",
+        "OK",
+        "Got it",
+        "Allow All",
+    ):
+        if time.monotonic() >= deadline:
+            return
+        try:
+            btn = page.get_by_role("button", name=re.compile(re.escape(label), re.I))
+            if await btn.count() == 0:
+                continue
+            ms = max(300, int((deadline - time.monotonic()) * 1000))
+            if ms < 400:
+                return
+            await btn.first.click(timeout=min(2000, ms))
+            await asyncio.sleep(1.2)
+            return
+        except Exception:
+            continue
 
 
 @dataclass

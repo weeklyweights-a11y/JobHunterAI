@@ -7,24 +7,18 @@ import json
 import logging
 from urllib.request import Request, urlopen
 
-from parsers.ats_posted_time import accept_normalized_posted_string
+from parsers.ats_posted_time import (
+    accept_normalized_posted_string,
+    title_matches_search_roles,
+)
 from parsers.job_description import html_fragment_to_plain_text
 
 logger = logging.getLogger(__name__)
 
 
 def _title_match(title: str, roles: list[str]) -> bool:
-    t = (title or "").lower()
-    if not t:
-        return False
-    for r in roles:
-        rr = (r or "").lower().strip()
-        if not rr:
-            continue
-        toks = [x for x in rr.replace("/", " ").split() if len(x) >= 3]
-        if rr in t or any(tok in t for tok in toks):
-            return True
-    return False
+    """Delegates to shared logic so API filtering matches Ashby/Greenhouse HTTP listing passes."""
+    return title_matches_search_roles(title, roles)
 
 
 def _loc_match(loc: str, locations: list[str]) -> bool:

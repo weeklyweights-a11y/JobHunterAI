@@ -332,6 +332,8 @@ async def search_ats(
                 max_concurrent=6,
                 playwright_context=playwright_context,
                 reuse_page=reuse_page,
+                roles=roles,
+                search_roles=roles,
             )
         except asyncio.CancelledError:
             await _emit(
@@ -345,6 +347,8 @@ async def search_ats(
                     max_concurrent=6,
                     playwright_context=None,
                     reuse_page=None,
+                    roles=roles,
+                    search_roles=roles,
                 )
             except asyncio.CancelledError:
                 await _emit(
