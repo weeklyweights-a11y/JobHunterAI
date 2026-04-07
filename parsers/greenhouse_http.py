@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -20,6 +21,7 @@ from parsers.ats_posted_time import (
     _json_ld_date_posted,
     _normalize_date_value,
     accept_normalized_posted_string,
+    fetch_job_page_html_cached,
     title_matches_search_roles,
 )
 from parsers.job_description import html_fragment_to_plain_text
@@ -406,38 +408,31 @@ async def enrich_greenhouse_jobs_via_http(
     jobs: list[dict[str, Any]],
     *,
     emit: Any | None = None,
+    html_cache: dict[str, str] | None = None,
 ) -> int:
     """
     For each ``greenhouse.io`` listing URL, HTTP GET and merge Remix jobPost + regex/JSON-LD fallbacks.
     Skips Playwright listing loads when date + description are both filled afterward.
     """
-    from parsers.ats_posted_time import _fetch_job_page_sync
+    from parsers.ashby_http import job_patch_from_ld_json
 
-    n_gh_urls = 0
-    n_fetched_ok = 0
-    n_fetch_fail = 0
-    n_enriched = 0
-
-    for j in jobs:
+    async def _one(j: dict[str, Any]) -> tuple[int, int, int]:
+        """Returns (attempted, fetch_ok_or_fail_as_1_0, enriched)."""
         url = str(j.get("url") or "").strip()
         host = urlparse(url).netloc.lower()
         if not url or "greenhouse.io" not in host:
-            continue
+            return 0, 0, 0
         if is_greenhouse_board_listing_url(url):
-            continue
-        n_gh_urls += 1
+            return 0, 0, 0
         try:
-            html = await asyncio.to_thread(_fetch_job_page_sync, url)
+            html = await asyncio.to_thread(fetch_job_page_html_cached, url, html_cache)
         except (HTTPError, URLError, OSError) as e:
-            n_fetch_fail += 1
             logger.debug("Greenhouse HTTP fetch failed url=%s err=%s", url[:120], e)
-            continue
+            return 1, 0, 0
         except Exception:
-            n_fetch_fail += 1
             logger.debug("Greenhouse HTTP fetch failed url=%s", url[:120], exc_info=True)
-            continue
+            return 1, 0, 0
 
-        n_fetched_ok += 1
         if _extract_remix_context(html) is None:
             logger.debug(
                 "Greenhouse HTTP: no __remixContext found in page url=%s",
@@ -446,14 +441,38 @@ async def enrich_greenhouse_jobs_via_http(
 
         patch = merge_greenhouse_remix_page_into_job(html, url)
         if not patch:
-            from parsers.ashby_http import job_patch_from_ld_json
-
             patch = job_patch_from_ld_json(html)
 
         if not patch:
-            continue
+            return 1, 1, 0
         _apply_patch_to_job(j, patch)
-        n_enriched += 1
+        return 1, 1, 1
+
+    eligible = [
+        j
+        for j in jobs
+        if str(j.get("url") or "").strip()
+        and "greenhouse.io" in urlparse(str(j.get("url") or "")).netloc.lower()
+        and not is_greenhouse_board_listing_url(str(j.get("url") or ""))
+    ]
+    n_gh_urls = 0
+    n_fetched_ok = 0
+    n_fetch_fail = 0
+    n_enriched = 0
+    batch = 5
+    for i in range(0, len(eligible), batch):
+        chunk = eligible[i : i + batch]
+        rows = await asyncio.gather(*(_one(j) for j in chunk))
+        for a, ok, en in rows:
+            n_gh_urls += a
+            if a:
+                if ok:
+                    n_fetched_ok += 1
+                else:
+                    n_fetch_fail += 1
+            n_enriched += en
+        if i + batch < len(eligible):
+            await asyncio.sleep(random.uniform(0.5, 1.0))
 
     n_attempted = n_gh_urls
     n_ok = n_enriched
@@ -602,30 +621,25 @@ async def enrich_greenhouse_embedded_jobs_via_http(
     jobs: list[dict[str, Any]],
     *,
     emit: Any | None = None,
+    html_cache: dict[str, str] | None = None,
 ) -> int:
     """
     Career sites on custom domains with ``gh_jid``: fetch page JSON-LD / ``published_at``, or
     Greenhouse board API when a board token appears in the HTML.
     """
-    from parsers.ats_posted_time import _fetch_job_page_sync
-
-    n_attempted = 0
-    n_enriched = 0
-
-    for j in jobs:
+    async def _one(j: dict[str, Any]) -> tuple[int, int]:
         url = str(j.get("url") or "").strip()
         host = urlparse(url).netloc.lower()
         if not url or "greenhouse.io" in host:
-            continue
+            return 0, 0
         gh_jid = extract_gh_jid_from_url(url)
         if not gh_jid:
-            continue
+            return 0, 0
         if str(j.get("posted_time") or "").strip():
-            continue
-        n_attempted += 1
+            return 0, 0
         patch: dict[str, Any] = {}
         try:
-            html = await asyncio.to_thread(_fetch_job_page_sync, url)
+            html = await asyncio.to_thread(fetch_job_page_html_cached, url, html_cache)
         except (HTTPError, URLError, OSError) as e:
             logger.debug("Greenhouse embedded HTTP fetch failed url=%s err=%s", url[:120], e)
             html = ""
@@ -660,12 +674,31 @@ async def enrich_greenhouse_embedded_jobs_via_http(
 
         if patch:
             _apply_patch_to_job(j, patch)
-            n_enriched += 1
-        else:
-            logger.debug(
-                "Greenhouse embedded HTTP: no date/title from career page or API url=%s",
-                url[:200],
-            )
+            return 1, 1
+        logger.debug(
+            "Greenhouse embedded HTTP: no date/title from career page or API url=%s",
+            url[:200],
+        )
+        return 1, 0
+
+    eligible = [
+        j
+        for j in jobs
+        if not str(j.get("posted_time") or "").strip()
+        and extract_gh_jid_from_url(str(j.get("url") or ""))
+        and "greenhouse.io" not in urlparse(str(j.get("url") or "")).netloc.lower()
+    ]
+    n_attempted = 0
+    n_enriched = 0
+    batch = 5
+    for i in range(0, len(eligible), batch):
+        chunk = eligible[i : i + batch]
+        rows = await asyncio.gather(*(_one(j) for j in chunk))
+        for att, en in rows:
+            n_attempted += att
+            n_enriched += en
+        if i + batch < len(eligible):
+            await asyncio.sleep(random.uniform(0.5, 1.0))
 
     logger.info(
         "ATS Greenhouse embedded (gh_jid): attempted %s, enriched %s",

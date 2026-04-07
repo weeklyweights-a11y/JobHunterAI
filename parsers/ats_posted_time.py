@@ -694,9 +694,51 @@ def _fetch_job_page_sync(url: str) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-async def _listing_html_via_playwright_page(page: Page, url: str) -> str:
+def fetch_job_page_html_cached(url: str, cache: dict[str, str] | None) -> str:
+    """Single-flight HTML for one enrichment run (same URL may be hit by several passes)."""
+    if cache is not None and url in cache:
+        return cache[url]
+    html = _fetch_job_page_sync(url)
+    if cache is not None:
+        cache[url] = html
+    return html
+
+
+def location_matches_search_locations(loc: str, locations: list[str]) -> bool:
+    """Same rules as Greenhouse API: substring match on location text vs search locations."""
+    l = (loc or "").lower()
+    if not l:
+        return False
+    for q in locations:
+        qq = (q or "").lower().strip()
+        if not qq:
+            continue
+        if qq in l:
+            return True
+        if qq in ("us", "usa", "united states") and "united states" in l:
+            return True
+    return False
+
+
+_BROWSER_SKIP_PLATFORMS = frozenset({"workday", "icims"})
+_BROWSER_PLATFORM_PRIORITY: dict[str, int] = {
+    "greenhouse": 0,
+    "lever": 1,
+    "ashby": 2,
+    "smartrecruiters": 3,
+    "workable": 4,
+}
+
+
+async def _listing_html_via_playwright_page(
+    page: Page,
+    url: str,
+    *,
+    html_cache: dict[str, str] | None = None,
+) -> str:
     from agents.browser_mgr import dismiss_cookie_popup
 
+    key = url.split("#")[0]
     await page.goto(url, wait_until="domcontentloaded", timeout=90_000)
     await dismiss_cookie_popup(page)
     try:
@@ -708,7 +750,10 @@ async def _listing_html_via_playwright_page(page: Page, url: str) -> str:
     except PlaywrightTimeoutError:
         pass
     await asyncio.sleep(1.0)
-    return await page.content()
+    content = await page.content()
+    if html_cache is not None and key:
+        html_cache[key] = content
+    return content
 
 
 async def enrich_ats_jobs_posted_times(
@@ -720,17 +765,34 @@ async def enrich_ats_jobs_posted_times(
     reuse_page: Page | None = None,
     roles: list[str] | None = None,
     search_roles: list[str] | None = None,
-) -> list[dict[str, Any]]:
+    html_cache: dict[str, str] | None = None,
+    pipeline_counts: dict[str, int] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """
     HTTP enrichment order: Ashby (job pages then board ``jobPostings``) → Greenhouse job pages →
     Lever job pages → Greenhouse board listings (public API) → Greenhouse ``gh_jid`` embeds;
     then parallel HTTP or Playwright for whatever still needs dates or descriptions.
 
     ``search_roles`` (if provided) overrides ``roles`` for board listing filters and link discovery.
+    Returns ``(jobs, stats)`` for pipeline summary logging.
     """
+    stats: dict[str, Any] = {
+        "n_ashby_http": 0,
+        "n_greenhouse_http": 0,
+        "n_lever_http": 0,
+        "n_greenhouse_listing_http": 0,
+        "n_greenhouse_embedded_http": 0,
+        "n_generic_http_dates": 0,
+        "n_browser_dates": 0,
+        "n_browser_skipped_spa": 0,
+        "n_missing_posted_time": 0,
+    }
     if not jobs:
-        return jobs
+        if pipeline_counts:
+            stats.update({f"pipeline_{k}": v for k, v in pipeline_counts.items()})
+        return jobs, stats
 
+    run_cache = html_cache if html_cache is not None else {}
     sr = list(search_roles) if search_roles is not None else list(roles or [])
 
     from parsers.ashby_http import enrich_ashby_jobs_via_http
@@ -741,11 +803,21 @@ async def enrich_ats_jobs_posted_times(
     )
     from parsers.lever_http import enrich_lever_jobs_via_http
 
-    await enrich_ashby_jobs_via_http(jobs, emit=emit, search_roles=sr)
-    await enrich_greenhouse_jobs_via_http(jobs, emit=emit)
-    await enrich_lever_jobs_via_http(jobs, emit=emit)
-    await enrich_greenhouse_listing_pages_via_http(jobs, search_roles=sr, emit=emit)
-    await enrich_greenhouse_embedded_jobs_via_http(jobs, emit=emit)
+    stats["n_ashby_http"] = await enrich_ashby_jobs_via_http(
+        jobs, emit=emit, search_roles=sr, html_cache=run_cache
+    )
+    stats["n_greenhouse_http"] = await enrich_greenhouse_jobs_via_http(
+        jobs, emit=emit, html_cache=run_cache
+    )
+    stats["n_lever_http"] = await enrich_lever_jobs_via_http(
+        jobs, emit=emit, html_cache=run_cache
+    )
+    stats["n_greenhouse_listing_http"] = await enrich_greenhouse_listing_pages_via_http(
+        jobs, search_roles=sr, emit=emit
+    )
+    stats["n_greenhouse_embedded_http"] = await enrich_greenhouse_embedded_jobs_via_http(
+        jobs, emit=emit, html_cache=run_cache
+    )
 
     targets: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
@@ -763,12 +835,25 @@ async def enrich_ats_jobs_posted_times(
         targets.append(j)
 
     if not targets:
-        return jobs
+        stats["n_missing_posted_time"] = sum(
+            1
+            for j in jobs
+            if str(j.get("url") or "").strip()
+            and _platform_from_url(str(j.get("url") or ""))
+            and not str(j.get("posted_time") or "").strip()
+        )
+        if pipeline_counts:
+            stats.update({f"pipeline_{k}": v for k, v in pipeline_counts.items()})
+        return jobs, stats
+
+    def _browser_skip(url: str) -> bool:
+        return _platform_from_url(url) in _BROWSER_SKIP_PLATFORMS
 
     listing_batch = [
         j
         for j in targets
         if is_probably_ats_listing_page(str(j.get("url") or ""))
+        and not _browser_skip(str(j.get("url") or ""))
     ]
     job_batch = [
         j
@@ -805,7 +890,7 @@ async def enrich_ats_jobs_posted_times(
         url = str(job.get("url") or "").strip()
         async with sem:
             try:
-                html = await asyncio.to_thread(_fetch_job_page_sync, url)
+                html = await asyncio.to_thread(fetch_job_page_html_cached, url, run_cache)
             except (HTTPError, URLError, OSError) as e:
                 logger.debug("ATS posted_time fetch failed url=%s err=%s", url, e)
                 return 0
@@ -831,6 +916,7 @@ async def enrich_ats_jobs_posted_times(
             page = await playwright_context.new_page()
             own_page = True
         filled = 0
+        n_browser_skipped = 0
         discovered: list[dict[str, Any]] = []
         all_job_urls = {
             str(x.get("url") or "").strip()
@@ -843,7 +929,9 @@ async def enrich_ats_jobs_posted_times(
                     await asyncio.sleep(random.uniform(2.0, 4.0))
                 u = str(lt.get("url") or "").strip()
                 try:
-                    await _listing_html_via_playwright_page(page, u)
+                    await _listing_html_via_playwright_page(
+                        page, u, html_cache=run_cache
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
@@ -887,13 +975,29 @@ async def enrich_ats_jobs_posted_times(
                     jobs.append(new_j)
                     discovered.append(new_j)
 
-            work_queue = job_batch + discovered
+            raw_wq = job_batch + discovered
+            browser_jobs = [j for j in raw_wq if not _browser_skip(str(j.get("url") or ""))]
+            n_browser_skipped = len(raw_wq) - len(browser_jobs)
+            stats["n_browser_skipped_spa"] = n_browser_skipped
+            if n_browser_skipped and emit is not None:
+                await emit(
+                    f"ATS: browser pass skipping {n_browser_skipped} Workday/iCIMS URL(s) "
+                    "(SPA — DOM date extraction not reliable)."
+                )
+
+            def _prio(j: dict[str, Any]) -> int:
+                pl = _platform_from_url(str(j.get("url") or ""))
+                return _BROWSER_PLATFORM_PRIORITY.get(pl, 6)
+
+            work_queue = sorted(browser_jobs, key=_prio)
             for idx, job in enumerate(work_queue, start=1):
                 if idx > 1:
                     await asyncio.sleep(random.uniform(2.0, 4.0))
                 url = str(job.get("url") or "").strip()
                 try:
-                    html = await _listing_html_via_playwright_page(page, url)
+                    html = await _listing_html_via_playwright_page(
+                        page, url, html_cache=run_cache
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
@@ -929,6 +1033,9 @@ async def enrich_ats_jobs_posted_times(
         counts = await asyncio.gather(*(_one_http(j) for j in job_batch))
         filled = sum(counts)
 
+    stats["n_generic_http_dates"] = filled if not use_browser else 0
+    stats["n_browser_dates"] = filled if use_browser else 0
+
     mode = "browser" if use_browser else "http"
     n_report = len(work_queue)
     logger.info(
@@ -943,4 +1050,28 @@ async def enrich_ats_jobs_posted_times(
             f"({n_report - filled} still unknown if HTML had no date or load failed)."
         )
 
-    return jobs
+    stats["n_missing_posted_time"] = sum(
+        1
+        for j in jobs
+        if str(j.get("url") or "").strip()
+        and _platform_from_url(str(j.get("url") or ""))
+        and not str(j.get("posted_time") or "").strip()
+    )
+    if pipeline_counts:
+        stats.update({f"pipeline_{k}": v for k, v in pipeline_counts.items()})
+
+    logger.info(
+        "ATS enrichment summary: ashby_http=%s gh_http=%s lever_http=%s gh_list=%s gh_embed=%s "
+        "generic_http_dates=%s browser_dates=%s browser_skip_spa=%s missing_posted_time=%s",
+        stats["n_ashby_http"],
+        stats["n_greenhouse_http"],
+        stats["n_lever_http"],
+        stats["n_greenhouse_listing_http"],
+        stats["n_greenhouse_embedded_http"],
+        stats["n_generic_http_dates"],
+        stats["n_browser_dates"],
+        stats["n_browser_skipped_spa"],
+        stats["n_missing_posted_time"],
+    )
+
+    return jobs, stats

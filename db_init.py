@@ -268,4 +268,12 @@ async def init_db() -> None:
                 "ALTER TABLE config ADD COLUMN linkedin_include_reposts "
                 "INTEGER NOT NULL DEFAULT 0"
             )
+        if "jobright_email" not in cfg_cols:
+            await db.execute(
+                "ALTER TABLE config ADD COLUMN jobright_email TEXT NOT NULL DEFAULT ''"
+            )
+        if "jobright_password" not in cfg_cols:
+            await db.execute(
+                "ALTER TABLE config ADD COLUMN jobright_password TEXT NOT NULL DEFAULT ''"
+            )
         await db.commit()

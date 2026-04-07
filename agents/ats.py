@@ -14,10 +14,13 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from agents.base import EmitFn
 from agents.browser_mgr import playwright_browser_session
+from agents.ashby_api import enrich_ashby
 from agents.greenhouse_api import enrich_greenhouse
+from agents.lever_api import enrich_lever
 from parsers.ats_posted_time import (
     enrich_ats_jobs_posted_times,
     filter_ats_jobs_by_posted_within_days,
+    title_matches_search_roles,
 )
 from parsers.google_parser import discover_google_selectors, parse_google_results_html
 
@@ -25,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # Google SERP: up to this many pages (10 results each) per role×location×platform.
 # Stops earlier when a page adds zero new URLs. Override: JOBHUNTER_ATS_GOOGLE_MAX_SERP_PAGES.
-ATS_GOOGLE_MAX_SERP_PAGES_DEFAULT = 20
+ATS_GOOGLE_MAX_SERP_PAGES_DEFAULT = 5
 ATS_GOOGLE_MAX_SERP_PAGES_CAP = 50
 
 # Google site: uses root domain so all subdomains (and many paths) match.
@@ -198,6 +201,22 @@ def _greenhouse_token(url: str) -> str:
     return parts[0].strip().lower() if parts else ""
 
 
+def _lever_company_slug(url: str) -> str:
+    u = urlparse((url or "").strip())
+    if "lever.co" not in (u.netloc or "").lower():
+        return ""
+    parts = [p for p in (u.path or "").split("/") if p]
+    return parts[0].strip().lower() if parts else ""
+
+
+def _ashby_board_slug(url: str) -> str:
+    u = urlparse((url or "").strip())
+    if "ashbyhq.com" not in (u.netloc or "").lower():
+        return ""
+    parts = [p for p in (u.path or "").split("/") if p]
+    return parts[0].strip().lower() if parts else ""
+
+
 def _merge_ats_locations(existing: str, extra: str) -> str:
     """Pipe-separate unique posting locations (case-insensitive), same idea as LinkedIn."""
     parts = [p.strip() for p in (existing or "").split("|") if p.strip()]
@@ -262,36 +281,81 @@ async def search_ats(
     platform_keys = _enabled_platform_keys(enabled_platforms)
     results: dict[str, dict] = {}
     greenhouse_tokens: set[str] = set()
+    lever_slugs: set[str] = set()
+    ashby_slugs: set[str] = set()
 
     combos = [(r, l) for r in roles for l in locations]
     serp_pages = _ats_google_serp_page_count(app_cfg)
     captcha_wait = float(_ats_captcha_wait_seconds(app_cfg))
     greenhouse_attempted = False
+    lever_attempted = False
+    ashby_attempted = False
 
-    async def merge_greenhouse_into_results() -> None:
+    def _merge_api_rows(rows: list[dict]) -> None:
+        for j in rows:
+            u = str(j.get("url") or "").strip()
+            if not u:
+                continue
+            if u in results:
+                prev = results[u]
+                prev.update({k: v for k, v in j.items() if v})
+                results[u] = prev
+            else:
+                results[u] = dict(j)
+
+    async def merge_greenhouse_into_results() -> int:
         nonlocal greenhouse_attempted
         if greenhouse_attempted or not greenhouse_tokens:
-            return
+            return 0
         greenhouse_attempted = True
         try:
             gh_rows = await enrich_greenhouse(
                 list(greenhouse_tokens), roles=roles, locations=locations
             )
-            for j in gh_rows:
-                u = str(j.get("url") or "").strip()
-                if not u:
-                    continue
-                if u in results:
-                    prev = results[u]
-                    prev.update({k: v for k, v in j.items() if v})
-                    results[u] = prev
-                else:
-                    results[u] = dict(j)
+            _merge_api_rows(gh_rows)
+            return len(gh_rows)
         except Exception:
             logger.exception("ATS: Greenhouse API enrichment failed")
             await _emit(
                 "ATS: Greenhouse API step failed — keeping Google-discovered rows only where applicable."
             )
+            return 0
+
+    async def merge_lever_into_results() -> int:
+        nonlocal lever_attempted
+        if lever_attempted or not lever_slugs:
+            return 0
+        lever_attempted = True
+        try:
+            rows = await enrich_lever(
+                list(lever_slugs), roles=roles, locations=locations
+            )
+            _merge_api_rows(rows)
+            return len(rows)
+        except Exception:
+            logger.exception("ATS: Lever API enrichment failed")
+            await _emit(
+                "ATS: Lever API step failed — keeping Google and other ATS rows only."
+            )
+            return 0
+
+    async def merge_ashby_into_results() -> int:
+        nonlocal ashby_attempted
+        if ashby_attempted or not ashby_slugs:
+            return 0
+        ashby_attempted = True
+        try:
+            rows = await enrich_ashby(
+                list(ashby_slugs), roles=roles, locations=locations
+            )
+            _merge_api_rows(rows)
+            return len(rows)
+        except Exception:
+            logger.exception("ATS: Ashby API enrichment failed")
+            await _emit(
+                "ATS: Ashby API step failed — HTML/board enrichment may still run later."
+            )
+            return 0
 
     async def apply_age_filter(out: list[dict]) -> list[dict]:
         _age_raw = (app_cfg or {}).get("ats_posted_within_days")
@@ -324,9 +388,12 @@ async def search_ats(
         *,
         playwright_context,
         reuse_page,
+        pipeline_counts: dict[str, int],
     ) -> list[dict]:
+        html_cache: dict[str, str] = {}
+        stats: dict = {}
         try:
-            await enrich_ats_jobs_posted_times(
+            out, stats = await enrich_ats_jobs_posted_times(
                 out,
                 emit=emit,
                 max_concurrent=6,
@@ -334,6 +401,8 @@ async def search_ats(
                 reuse_page=reuse_page,
                 roles=roles,
                 search_roles=roles,
+                html_cache=html_cache,
+                pipeline_counts=pipeline_counts,
             )
         except asyncio.CancelledError:
             await _emit(
@@ -341,7 +410,7 @@ async def search_ats(
                 "for any rows still missing a date, then applying the age filter."
             )
             try:
-                await enrich_ats_jobs_posted_times(
+                out, stats = await enrich_ats_jobs_posted_times(
                     out,
                     emit=emit,
                     max_concurrent=6,
@@ -349,6 +418,8 @@ async def search_ats(
                     reuse_page=None,
                     roles=roles,
                     search_roles=roles,
+                    html_cache=html_cache,
+                    pipeline_counts=pipeline_counts,
                 )
             except asyncio.CancelledError:
                 await _emit(
@@ -362,6 +433,39 @@ async def search_ats(
                 "ATS: warning — could not finish loading all listing pages for posted dates; "
                 "keeping jobs we already found (some may lack a date or fail age filter)."
             )
+            stats = {}
+        if stats:
+            logger.info(
+                "ATS pipeline (post-HTTP): Ashby HTTP=%s GH HTTP=%s Lever HTTP=%s "
+                "GH listing HTTP=%s GH embed=%s generic HTTP dates=%s browser dates=%s "
+                "browser_skip_spa=%s still_missing_posted_time=%s",
+                stats.get("n_ashby_http"),
+                stats.get("n_greenhouse_http"),
+                stats.get("n_lever_http"),
+                stats.get("n_greenhouse_listing_http"),
+                stats.get("n_greenhouse_embedded_http"),
+                stats.get("n_generic_http_dates"),
+                stats.get("n_browser_dates"),
+                stats.get("n_browser_skipped_spa"),
+                stats.get("n_missing_posted_time"),
+            )
+            if emit:
+                await emit(
+                    f"ATS pipeline summary: Google URLs {pipeline_counts.get('n_google', 0)}; "
+                    f"API rows — Greenhouse {pipeline_counts.get('n_greenhouse_api', 0)}, "
+                    f"Lever {pipeline_counts.get('n_lever_api', 0)}, "
+                    f"Ashby {pipeline_counts.get('n_ashby_api', 0)}; "
+                    f"after dedup {pipeline_counts.get('n_after_dedup', len(out))} rows. "
+                    f"HTTP enrich dates — Ashby {stats.get('n_ashby_http', 0)}, "
+                    f"GH job pages {stats.get('n_greenhouse_http', 0)}, "
+                    f"Lever {stats.get('n_lever_http', 0)}, "
+                    f"GH board listing {stats.get('n_greenhouse_listing_http', 0)}, "
+                    f"GH embed {stats.get('n_greenhouse_embedded_http', 0)}; "
+                    f"generic HTTP {stats.get('n_generic_http_dates', 0)}, "
+                    f"browser {stats.get('n_browser_dates', 0)}; "
+                    f"skipped SPA browser {stats.get('n_browser_skipped_spa', 0)}; "
+                    f"still no posted_time {stats.get('n_missing_posted_time', 0)}."
+                )
         return await apply_age_filter(out)
 
     async def finalize_pipeline(
@@ -369,7 +473,10 @@ async def search_ats(
         playwright_context=None,
         reuse_page=None,
     ) -> list[dict]:
-        await merge_greenhouse_into_results()
+        n_google = len(results)
+        n_gh_api = await merge_greenhouse_into_results()
+        n_lv_api = await merge_lever_into_results()
+        n_ab_api = await merge_ashby_into_results()
         out = list(results.values())
         out, n_tc_dup = _dedupe_ats_jobs_by_title_company(out)
         if n_tc_dup:
@@ -378,10 +485,18 @@ async def search_ats(
                 f"(different apply URLs per location) into {len(out)} row(s) — "
                 "one link per job, locations combined with ' | '."
             )
+        pipeline_counts = {
+            "n_google": n_google,
+            "n_greenhouse_api": n_gh_api,
+            "n_lever_api": n_lv_api,
+            "n_ashby_api": n_ab_api,
+            "n_after_dedup": len(out),
+        }
         return await enrich_then_age(
             out,
             playwright_context=playwright_context,
             reuse_page=reuse_page,
+            pipeline_counts=pipeline_counts,
         )
 
     try:
@@ -453,11 +568,16 @@ async def search_ats(
                                     dbg.get("body_prefix"),
                                 )
                             before = len(results)
+                            new_title_ok = 0
                             for j in batch:
                                 u = str(j.get("url") or "").strip()
                                 if not u:
                                     continue
+                                title_txt = str(j.get("title") or "")
+                                if not title_matches_search_roles(title_txt, [role]):
+                                    continue
                                 if u not in results:
+                                    new_title_ok += 1
                                     row = dict(j)
                                     row["search_role"] = role
                                     row["search_location"] = loc
@@ -465,11 +585,18 @@ async def search_ats(
                                     tok = _greenhouse_token(u)
                                     if tok:
                                         greenhouse_tokens.add(tok)
+                                    lv = _lever_company_slug(u)
+                                    if lv:
+                                        lever_slugs.add(lv)
+                                    ab = _ashby_board_slug(u)
+                                    if ab:
+                                        ashby_slugs.add(ab)
                             added = len(results) - before
                             await _emit(
-                                f"ATS: page {p + 1}/{serp_pages} +{added} new (total {len(results)})"
+                                f"ATS: page {p + 1}/{serp_pages} +{added} new "
+                                f"(title-match new URLs this page: {new_title_ok}, total {len(results)})"
                             )
-                            if p > 0 and added == 0:
+                            if p > 0 and new_title_ok < 3:
                                 break
                             await asyncio.sleep(random.uniform(5.0, 8.0))
                         await asyncio.sleep(random.uniform(5.0, 8.0))

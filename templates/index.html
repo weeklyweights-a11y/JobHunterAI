@@ -65,6 +65,7 @@
                     <label class="toggle"><input type="checkbox" id="src-linkedin" checked data-source-key="linkedin"><span class="toggle-ui"></span><span>LinkedIn</span></label>
                     <label class="toggle"><input type="checkbox" id="src-indeed" checked data-source-key="indeed"><span class="toggle-ui"></span><span>Indeed</span></label>
                     <label class="toggle"><input type="checkbox" id="src-ats" data-source-key="ats"><span class="toggle-ui"></span><span>ATS Platforms</span></label>
+                    <label class="toggle"><input type="checkbox" id="src-jobright" data-source-key="jobright"><span class="toggle-ui"></span><span>Jobright AI</span></label>
                     <label class="toggle"><input type="checkbox" id="src-yc" checked data-source-key="yc"><span class="toggle-ui"></span><span>YC Work at a Startup</span></label>
                     <label class="toggle"><input type="checkbox" id="src-career" checked data-source-key="career_page"><span class="toggle-ui"></span><span>Custom Career Pages</span></label>
                 </div>
@@ -156,6 +157,19 @@
                 <div class="field-group">
                     <label class="toggle"><input type="checkbox" id="linkedin-include-easy-apply"><span class="toggle-ui"></span><span>Include Easy Apply jobs</span></label>
                     <p class="help-text">Off (default): skip jobs that show an Easy Apply badge; promoted and other external listings are still collected. On: collect all jobs; the report still tags each row as easy_apply or external.</p>
+                </div>
+            </section>
+
+            <section class="form-section" aria-labelledby="jobright-login-heading">
+                <h3 id="jobright-login-heading" class="section-heading">Jobright AI sign-in</h3>
+                <p class="help-text">Used only to open <strong>jobright.ai</strong> in the automation browser. The feed uses your Jobright profile (resume); roles below still filter titles. Store credentials at your own risk.</p>
+                <div class="field-group">
+                    <label class="field-label" for="jobright-email">Jobright email</label>
+                    <input type="email" id="jobright-email" class="text-input" placeholder="you@email.com" autocomplete="username">
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="jobright-password">Jobright password</label>
+                    <input type="password" id="jobright-password" class="text-input" placeholder="Leave blank to keep saved password" autocomplete="new-password">
                 </div>
             </section>
 
@@ -253,6 +267,8 @@
                 <button type="button" class="filter-btn active" data-filter="all">All</button>
                 <button type="button" class="filter-btn" data-filter="linkedin">LinkedIn</button>
                 <button type="button" class="filter-btn" data-filter="indeed">Indeed</button>
+                <button type="button" class="filter-btn" data-filter="ats">ATS</button>
+                <button type="button" class="filter-btn" data-filter="jobright">Jobright</button>
                 <button type="button" class="filter-btn" data-filter="yc">YC</button>
                 <button type="button" class="filter-btn" data-filter="career_page">Career Pages</button>
             </div>

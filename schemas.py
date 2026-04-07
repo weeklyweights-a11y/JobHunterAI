@@ -12,6 +12,19 @@ ExperienceLevel = Literal["any", "entry", "mid", "senior", "lead"]
 LlmProvider = Literal["gemini", "openai", "anthropic", "ollama"]
 ScheduleHours = Literal[2, 4, 6, 8, 12, 24]
 
+_SCHEDULE_HOURS_SET = frozenset({2, 4, 6, 8, 12, 24})
+_DEFAULT_SCHEDULE_HOUR = 4
+
+
+def _coerce_boolish(v: object) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(int(v))
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return False
+
 _url_adapter = TypeAdapter(HttpUrl)
 
 
@@ -34,6 +47,8 @@ class ConfigIn(BaseModel):
     auto_run_enabled: bool | None = None
     linkedin_email: str | None = None
     linkedin_password: str | None = None
+    jobright_email: str | None = None
+    jobright_password: str | None = None
     linkedin_include_easy_apply: bool | None = None
     linkedin_posted_past_week: bool | None = None
     linkedin_include_reposts: bool | None = None
@@ -44,6 +59,112 @@ class ConfigIn(BaseModel):
     ats_posted_within_days: int | None = None
     ats_google_max_serp_pages: int | None = None
     ats_captcha_wait_seconds: int | None = None
+
+    @field_validator("experience", mode="before")
+    @classmethod
+    def coerce_experience(cls, v: object) -> object:
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            return v
+        s = v.strip().lower()
+        if s in ("any", "entry", "mid", "senior", "lead"):
+            return s
+        return "any"
+
+    @field_validator("llm_provider", mode="before")
+    @classmethod
+    def coerce_llm_provider(cls, v: object) -> object:
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            return v
+        s = v.strip().lower()
+        if s in ("gemini", "openai", "anthropic", "ollama"):
+            return s
+        return "gemini"
+
+    @field_validator(
+        "auto_run_enabled",
+        "linkedin_include_easy_apply",
+        "linkedin_include_reposts",
+        "linkedin_posted_past_week",
+        "filter_jobs_by_relevance_llm",
+        mode="before",
+    )
+    @classmethod
+    def coerce_bool_config_flags(cls, v: object) -> object:
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, int):
+            return v != 0
+        if isinstance(v, float):
+            return v != 0.0
+        if isinstance(v, str):
+            return _coerce_boolish(v)
+        return v
+
+    @field_validator("schedule_hours", mode="before")
+    @classmethod
+    def coerce_schedule_hours(cls, v: object) -> int | None:
+        if v is None:
+            return None
+        n: int | None = None
+        if isinstance(v, bool):
+            n = int(v)
+        elif isinstance(v, str):
+            if v.strip():
+                try:
+                    n = int(float(v.strip()))
+                except (TypeError, ValueError):
+                    n = None
+        elif isinstance(v, float):
+            n = int(v) if v.is_integer() else int(v)
+        elif isinstance(v, int):
+            n = v
+        if n is None or n not in _SCHEDULE_HOURS_SET:
+            return _DEFAULT_SCHEDULE_HOUR
+        return n
+
+    @field_validator(
+        "dedup_days",
+        "ats_posted_within_days",
+        "ats_google_max_serp_pages",
+        "ats_captcha_wait_seconds",
+        mode="before",
+    )
+    @classmethod
+    def coerce_int_fields(cls, v: object) -> object:
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip():
+            try:
+                return int(float(v.strip()))
+            except ValueError:
+                return v
+        if isinstance(v, float) and v.is_integer():
+            return int(v)
+        return v
+
+    @field_validator("sources", mode="before")
+    @classmethod
+    def coerce_sources_bools(cls, v: object) -> dict[str, bool] | None:
+        if v is None:
+            return None
+        if not isinstance(v, dict):
+            return None
+        return {str(k): _coerce_boolish(val) for k, val in v.items()}
+
+    @field_validator("ats_platforms", mode="before")
+    @classmethod
+    def coerce_ats_platforms_bools(cls, v: object) -> dict[str, bool] | None:
+        if v is None:
+            return None
+        if not isinstance(v, dict):
+            return None
+        return {str(k): _coerce_boolish(val) for k, val in v.items()}
 
     @field_validator("linkedin_employment_types", mode="before")
     @classmethod
@@ -149,6 +270,8 @@ class ConfigOut(BaseModel):
     auto_run_enabled: bool = True
     linkedin_email: str = ""
     linkedin_password: str = ""
+    jobright_email: str = ""
+    jobright_password: str = ""
     linkedin_include_easy_apply: bool = False
     linkedin_posted_past_week: bool = False
     linkedin_include_reposts: bool = False

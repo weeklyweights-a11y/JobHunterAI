@@ -222,6 +222,17 @@ async def cleanup_old_jobs(retention_days: int = 30) -> int:
         return cur.rowcount
 
 
+async def delete_all_jobs() -> int:
+    """Remove every row from ``jobs``. Returns how many rows were deleted."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT COUNT(*) FROM jobs")
+        row = await cur.fetchone()
+        n = int(row[0]) if row and row[0] is not None else 0
+        await db.execute("DELETE FROM jobs")
+        await db.commit()
+    return n
+
+
 async def get_all_jobs(
     *,
     source: str | None = None,

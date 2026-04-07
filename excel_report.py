@@ -29,6 +29,7 @@ def _source_label(key: str) -> str:
         "linkedin": "LinkedIn",
         "indeed": "Indeed",
         "ats": "ATS",
+        "jobright": "Jobright AI",
         "greenhouse": "Greenhouse",
         "yc": "YC",
         "career_page": "Career Pages",

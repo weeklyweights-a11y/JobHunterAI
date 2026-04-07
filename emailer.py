@@ -17,10 +17,12 @@ logger = logging.getLogger(__name__)
 _GMAIL_HOST = "smtp.gmail.com"
 _GMAIL_PORT = 465
 
-_SOURCE_ORDER = ("linkedin", "indeed", "yc", "career_page")
+_SOURCE_ORDER = ("linkedin", "indeed", "ats", "jobright", "yc", "career_page")
 _SOURCE_LABELS = {
     "linkedin": "LinkedIn",
     "indeed": "Indeed",
+    "ats": "ATS",
+    "jobright": "Jobright AI",
     "yc": "YC",
     "career_page": "Career Pages",
 }

@@ -100,7 +100,7 @@ def validate_start_config(cfg: dict[str, Any]) -> str | None:
                 "JOBHUNTER_GEMINI_BACKEND=vertex and GOOGLE_CLOUD_PROJECT."
             )
     board_on = any(
-        sources.get(k, False) for k in ("linkedin", "indeed", "ats", "yc")
+        sources.get(k, False) for k in ("linkedin", "indeed", "ats", "jobright", "yc")
     )
     career_on = bool(sources.get("career_page"))
     career_urls = [
@@ -110,13 +110,13 @@ def validate_start_config(cfg: dict[str, Any]) -> str | None:
     ]
     if not board_on and not career_on:
         return (
-            "Enable at least one job source (LinkedIn, Indeed, ATS, YC, or Career Pages). "
+            "Enable at least one job source (LinkedIn, Indeed, ATS, Jobright AI, YC, or Career Pages). "
             "Start Hunting now saves your current checkboxes automatically."
         )
     if career_on and not career_urls and not board_on:
         return (
             "Career Pages is on but no URLs are saved. Add a career or custom URL, "
-            "or enable LinkedIn, Indeed, ATS, or YC."
+            "or enable LinkedIn, Indeed, ATS, Jobright AI, or YC."
         )
     return None
 

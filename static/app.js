@@ -126,7 +126,7 @@ function renderUrlList(listId, urls, onRemove) {
 }
 
 function setSourcesFromData(sources) {
-    const keys = ["linkedin", "indeed", "ats", "yc", "career_page"];
+    const keys = ["linkedin", "indeed", "ats", "jobright", "yc", "career_page"];
     keys.forEach(function (key) {
         const cb = document.querySelector('input[data-source-key="' + key + '"]');
         if (cb) {
@@ -140,6 +140,7 @@ function getSourcesPayload() {
         linkedin: document.getElementById("src-linkedin").checked,
         indeed: document.getElementById("src-indeed").checked,
         ats: document.getElementById("src-ats").checked,
+        jobright: !!document.getElementById("src-jobright")?.checked,
         yc: document.getElementById("src-yc").checked,
         career_page: document.getElementById("src-career").checked,
     };
@@ -190,7 +191,12 @@ function buildSettingsPayload(includeSecretsIfPresent) {
         sources: getSourcesPayload(),
         career_pages: state.careerPages,
         custom_sites: state.customSites,
-        schedule_hours: Number(document.getElementById("schedule-hours").value),
+        schedule_hours: (function () {
+            const allowed = [2, 4, 6, 8, 12, 24];
+            const el = document.getElementById("schedule-hours");
+            const n = Number(el && el.value);
+            return allowed.indexOf(n) >= 0 ? n : 4;
+        })(),
         dedup_days: (function () {
             const el = document.getElementById("dedup-days");
             if (!el) {
@@ -233,6 +239,10 @@ function buildSettingsPayload(includeSecretsIfPresent) {
             const el = document.getElementById("linkedin-email");
             return el && el.value ? el.value.trim() : "";
         })(),
+        jobright_email: (function () {
+            const el = document.getElementById("jobright-email");
+            return el && el.value ? el.value.trim() : "";
+        })(),
         linkedin_include_easy_apply: !!document.getElementById("linkedin-include-easy-apply")?.checked,
         linkedin_include_reposts: !!document.getElementById("linkedin-include-reposts")?.checked,
         linkedin_posted_past_week: (function () {
@@ -258,6 +268,10 @@ function buildSettingsPayload(includeSecretsIfPresent) {
         const lip = document.getElementById("linkedin-password");
         if (lip && lip.value) {
             payload.linkedin_password = lip.value;
+        }
+        const jrp = document.getElementById("jobright-password");
+        if (jrp && jrp.value) {
+            payload.jobright_password = jrp.value;
         }
     }
     return payload;
@@ -328,6 +342,14 @@ async function loadConfig() {
     const liPw = document.getElementById("linkedin-password");
     if (liPw) {
         liPw.value = "";
+    }
+    const jrEm = document.getElementById("jobright-email");
+    if (jrEm) {
+        jrEm.value = data.jobright_email || "";
+    }
+    const jrPw = document.getElementById("jobright-password");
+    if (jrPw) {
+        jrPw.value = "";
     }
     const liEa = document.getElementById("linkedin-include-easy-apply");
     if (liEa) {
@@ -558,6 +580,10 @@ async function saveSettings(e) {
         if (liPwEl) {
             liPwEl.value = "";
         }
+        const jrPwEl = document.getElementById("jobright-password");
+        if (jrPwEl) {
+            jrPwEl.value = "";
+        }
         showToast("Settings saved.", "success");
         if (res.meta && res.meta.scheduler_activated) {
             showToast(
@@ -594,6 +620,7 @@ function sourceDisplayName(source) {
         icims: "iCIMS",
         yc: "YC",
         career_page: "Career Page",
+        jobright: "Jobright AI",
     };
     return m[source] || source || "";
 }

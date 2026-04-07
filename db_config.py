@@ -55,6 +55,10 @@ def _row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
         "linkedin_password": str(row["linkedin_password"])
         if "linkedin_password" in keys
         else "",
+        "jobright_email": str(row["jobright_email"]) if "jobright_email" in keys else "",
+        "jobright_password": str(row["jobright_password"])
+        if "jobright_password" in keys
+        else "",
         "linkedin_include_easy_apply": bool(row["linkedin_include_easy_apply"])
         if "linkedin_include_easy_apply" in keys
         else bool(row["linkedin_easy_apply_only"])
@@ -144,6 +148,7 @@ async def save_config(data: dict[str, Any]) -> dict[str, Any]:
                 career_pages = ?, custom_sites = ?, llm_provider = ?,
                 llm_api_key = ?, resume_path = ?, dedup_days = ?, browser_cdp_url = ?,
                 auto_run_enabled = ?, linkedin_email = ?, linkedin_password = ?,
+                jobright_email = ?, jobright_password = ?,
                 linkedin_include_easy_apply = ?, linkedin_posted_past_week = ?,
                 linkedin_include_reposts = ?, ats_platforms = ?,
                 linkedin_employment_types = ?, filter_jobs_by_relevance_llm = ?,
@@ -168,6 +173,8 @@ async def save_config(data: dict[str, Any]) -> dict[str, Any]:
                 1 if payload.get("auto_run_enabled", True) else 0,
                 str(payload.get("linkedin_email") or "").strip(),
                 str(payload.get("linkedin_password") or "").strip(),
+                str(payload.get("jobright_email") or "").strip(),
+                str(payload.get("jobright_password") or "").strip(),
                 1 if payload.get("linkedin_include_easy_apply") else 0,
                 1 if payload.get("linkedin_posted_past_week") else 0,
                 1 if payload.get("linkedin_include_reposts") else 0,

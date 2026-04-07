@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -12,7 +13,11 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from parsers.ats_posted_time import accept_normalized_posted_string, title_matches_search_roles
+from parsers.ats_posted_time import (
+    accept_normalized_posted_string,
+    fetch_job_page_html_cached,
+    title_matches_search_roles,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -300,39 +305,53 @@ async def enrich_ashby_jobs_via_http(
     *,
     emit: Any | None = None,
     search_roles: list[str] | None = None,
+    html_cache: dict[str, str] | None = None,
 ) -> int:
     """
     First: Ashby **job detail** URLs — ``__appData`` single posting + JSON-LD.
     Second: Ashby **board index** URLs — ``jobBoard.jobPostings``, filtered by ``search_roles``,
     update or append rows with constructed job URLs.
     """
-    from parsers.ats_posted_time import _fetch_job_page_sync
-
-    n_ok = 0
-    for j in jobs:
+    async def _one_detail(j: dict[str, Any]) -> int:
         url = str(j.get("url") or "").strip()
         if not url or "ashbyhq.com" not in urlparse(url).netloc.lower():
-            continue
+            return 0
         if is_ashby_company_listing_url(url):
-            continue
+            return 0
         try:
-            html = await asyncio.to_thread(_fetch_job_page_sync, url)
+            html = await asyncio.to_thread(fetch_job_page_html_cached, url, html_cache)
         except (HTTPError, URLError, OSError) as e:
             logger.debug("Ashby HTTP fetch failed url=%s err=%s", url[:120], e)
-            continue
+            return 0
         except Exception:
             logger.debug("Ashby HTTP fetch failed url=%s", url[:120], exc_info=True)
-            continue
+            return 0
         patch = merge_ashby_page_into_job(html, url)
         if not patch:
-            continue
+            return 0
         for k, v in patch.items():
             if v is None:
                 continue
             if isinstance(v, str) and not v.strip():
                 continue
             j[k] = v
-        n_ok += 1
+        return 1
+
+    eligible = [
+        j
+        for j in jobs
+        if str(j.get("url") or "").strip()
+        and "ashbyhq.com" in urlparse(str(j.get("url") or "")).netloc.lower()
+        and not is_ashby_company_listing_url(str(j.get("url") or ""))
+    ]
+    n_ok = 0
+    batch = 5
+    for i in range(0, len(eligible), batch):
+        chunk = eligible[i : i + batch]
+        got = await asyncio.gather(*(_one_detail(j) for j in chunk))
+        n_ok += sum(got)
+        if i + batch < len(eligible):
+            await asyncio.sleep(random.uniform(0.5, 1.0))
     if n_ok and emit is not None:
         await emit(
             f"ATS: enriched {n_ok} Ashby job page(s) via HTTP (embedded __appData / JSON-LD; "
@@ -342,6 +361,7 @@ async def enrich_ashby_jobs_via_http(
         jobs,
         search_roles=search_roles,
         emit=emit,
+        html_cache=html_cache,
     )
     return n_ok + n_board
 
@@ -351,14 +371,13 @@ async def enrich_ashby_listing_pages_via_http(
     *,
     search_roles: list[str] | None = None,
     emit: Any | None = None,
+    html_cache: dict[str, str] | None = None,
 ) -> int:
     """
     For each distinct ``jobs.ashbyhq.com/{slug}`` board URL in ``jobs``, fetch HTML and read
     ``__appData.jobBoard.jobPostings``. Role-filter postings, then update matching rows or append
     new job dicts with constructed ``.../{slug}/{id}`` URLs.
     """
-    from parsers.ats_posted_time import _fetch_job_page_sync
-
     listing_urls = sorted(
         {
             str(j.get("url") or "").strip().rstrip("/")
@@ -389,7 +408,9 @@ async def enrich_ashby_listing_pages_via_http(
                 }
                 break
         try:
-            html = await asyncio.to_thread(_fetch_job_page_sync, listing_url)
+            html = await asyncio.to_thread(
+                fetch_job_page_html_cached, listing_url, html_cache
+            )
         except (HTTPError, URLError, OSError) as e:
             logger.debug(
                 "Ashby listing HTTP fetch failed url=%s err=%s", listing_url[:120], e

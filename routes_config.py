@@ -27,7 +27,12 @@ router = APIRouter(tags=["config"])
 def _merge_config_patch(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     merged = {**current}
     for key, val in patch.items():
-        if key in ("email_app_password", "llm_api_key", "linkedin_password") and val == "":
+        if key in (
+            "email_app_password",
+            "llm_api_key",
+            "linkedin_password",
+            "jobright_password",
+        ) and val == "":
             continue
         merged[key] = val
     return merged

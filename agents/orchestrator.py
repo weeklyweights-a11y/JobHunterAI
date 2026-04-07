@@ -21,11 +21,12 @@ from agents.linkedin import _merge_posting_locations, search_linkedin
 from db_paths import normalize_linkedin_employment_types
 from agents.llm_setup import build_chat_model
 from agents.relevance_filter import filter_relevant_jobs
+from agents.jobright import scrape_jobright_jobs
 from agents.yc import search_yc
 
 logger = logging.getLogger(__name__)
 
-SOURCE_ORDER = ["linkedin", "indeed", "ats", "yc", "career_page"]
+SOURCE_ORDER = ["linkedin", "indeed", "ats", "jobright", "yc", "career_page"]
 
 
 def _linkedin_only_hunt() -> bool:
@@ -153,7 +154,7 @@ def dedupe_jobs_cross_source_title_company(
 
 
 def _by_source_counts_new(new_jobs: list[dict[str, Any]]) -> dict[str, int]:
-    keys = ("linkedin", "indeed", "ats", "yc", "career_page")
+    keys = ("linkedin", "indeed", "ats", "jobright", "yc", "career_page")
     out = {k: 0 for k in keys}
     for j in new_jobs:
         s = str(j.get("source") or "")
@@ -253,6 +254,8 @@ async def run_hunt(
                 raw = await search_indeed(roles, locs, emit=emit, app_cfg=cfg)
             elif key == "ats":
                 raw = await search_ats(roles, locs, emit=emit, app_cfg=cfg)
+            elif key == "jobright":
+                raw = await scrape_jobright_jobs(roles, locs, emit=emit, app_cfg=cfg)
             elif key == "yc":
                 if llm is None:
                     raise RuntimeError("Tier 2 LLM required for YC")
@@ -268,8 +271,8 @@ async def run_hunt(
             return key, [], time.perf_counter() - t0, msg
 
     # Run fast sources concurrently; keep YC/career_page sequential (LLM-heavy).
-    parallel_keys = [k for k in keys_enabled if k in ("linkedin", "indeed", "ats")]
-    serial_keys = [k for k in keys_enabled if k not in ("linkedin", "indeed", "ats")]
+    parallel_keys = [k for k in keys_enabled if k in ("linkedin", "indeed", "ats", "jobright")]
+    serial_keys = [k for k in keys_enabled if k not in ("linkedin", "indeed", "ats", "jobright")]
     results: list[tuple[str, list[dict[str, Any]], float, str | None]] = []
     if parallel_keys:
         # Shield so a stop/cancel can finish in-flight work (e.g. ATS HTTP posted-date pass)

@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 
 from parsers.ats_posted_time import (
     accept_normalized_posted_string,
+    location_matches_search_locations,
     title_matches_search_roles,
 )
 from parsers.job_description import html_fragment_to_plain_text
@@ -19,21 +20,6 @@ logger = logging.getLogger(__name__)
 def _title_match(title: str, roles: list[str]) -> bool:
     """Delegates to shared logic so API filtering matches Ashby/Greenhouse HTTP listing passes."""
     return title_matches_search_roles(title, roles)
-
-
-def _loc_match(loc: str, locations: list[str]) -> bool:
-    l = (loc or "").lower()
-    if not l:
-        return False
-    for q in locations:
-        qq = (q or "").lower().strip()
-        if not qq:
-            continue
-        if qq in l:
-            return True
-        if qq in ("us", "usa", "united states") and "united states" in l:
-            return True
-    return False
 
 
 def _fetch_board_jobs_sync(token: str) -> list[dict]:
@@ -62,7 +48,9 @@ async def enrich_greenhouse(
         for j in jobs:
             title = str(j.get("title") or "").strip()
             loc = str((j.get("location") or {}).get("name") or "").strip()
-            if not _title_match(title, roles) or not _loc_match(loc, locations):
+            if not _title_match(title, roles) or not location_matches_search_locations(
+                loc, locations
+            ):
                 continue
             updated = str(j.get("updated_at") or "").strip()
             posted = accept_normalized_posted_string(updated) or ""

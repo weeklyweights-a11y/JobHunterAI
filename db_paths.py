@@ -36,6 +36,7 @@ DEFAULT_SOURCES: dict[str, bool] = {
     "yc": True,
     "career_page": True,
     "ats": False,
+    "jobright": False,
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -63,6 +64,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "auto_run_enabled": True,
     "linkedin_email": "",
     "linkedin_password": "",
+    "jobright_email": "",
+    "jobright_password": "",
     # True = collect Easy Apply jobs too; False (default) = skip Easy Apply–badged cards only
     "linkedin_include_easy_apply": False,
     # False = LinkedIn search + freshness use last 24 hours; True = past week (7 days)
