@@ -1,6 +1,5 @@
 ﻿# JobHunter AI
 
-🇬🇧 English | 🇪🇸 Español (coming soon)
 
 AI-powered job search pipeline that discovers jobs across 6 sources, filters aggressively, and delivers fresh matches to your inbox every morning.
 
@@ -191,14 +190,6 @@ JobHunter AI
 - Human-in-the-loop
 - Quality over volume
 - Transparent, inspectable pipeline
-
----
-
-## Acknowledgements
-
-This README style and product-story inspiration are influenced by the structure and clarity of Career-Ops:
-
-- [Career-Ops repository](https://github.com/santifer/career-ops)
 
 ---
 
