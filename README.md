@@ -1,4 +1,4 @@
-﻿# JobHunter AI
+# JobHunter AI
 
 
 AI-powered job search pipeline that discovers jobs across 6 sources, filters aggressively, and delivers fresh matches to your inbox every morning.
@@ -190,6 +190,12 @@ JobHunter AI
 - Human-in-the-loop
 - Quality over volume
 - Transparent, inspectable pipeline
+
+---
+
+## Contributors
+
+- sidelectron
 
 ---
 
