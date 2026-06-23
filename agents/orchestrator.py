@@ -294,7 +294,7 @@ async def run_hunt(
                         uncancel()
                 else:
                     uncancel()
-        for key, item in zip(parallel_keys, bundled):
+        for key, item in zip(parallel_keys, bundled, strict=True):
             if isinstance(item, asyncio.CancelledError):
                 msg = f"Source {key} was stopped before completion."
                 errors.append(msg)
